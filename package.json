@@ -1,0 +1,22 @@
+{
+  "name": "classroom-pulse",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ckrfeng/classroom-pulse.git"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ckrfeng/classroom-pulse/issues"
+  },
+  "homepage": "https://github.com/ckrfeng/classroom-pulse#readme",
+  "dependencies": {
+    "socket.io": "^4.8.4"
+  }
+}

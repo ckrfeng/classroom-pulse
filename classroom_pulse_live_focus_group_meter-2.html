@@ -403,31 +403,24 @@
         </div>
     </main>
 
-    <!-- Firebase SDK & Application Logic -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
+    <!-- Socket.IO client, served automatically by server.js -->
+    <script src="/socket.io/socket.io.js"></script>
+
+    <!-- Application Logic (realtime votes via the Classroom Pulse server) -->
+    <script type="module">
         // =========================================================================
         // 1. GLOBAL STATE & CONFIGURATION
         // =========================================================================
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'classroom-pulse-default';
-        let db = null;
-        let auth = null;
-        let currentUser = null;
-        let firebaseReady = false;
-
-        // App State
         let currentMode = 'teacher'; // 'teacher' | 'student'
-        let roomCode = '';
+        let roomCode = '';           // room this teacher board is hosting
         let isDemoMode = false;
         let demoBias = 0; // Target bias for demo mode (-50 to +50)
         let demoWaveActive = false;
         let demoCurrent = 0;
 
-        // Real-time Sentiment State
-        let liveParticipants = new Map(); // uid -> { val, updatedAt }
+        // Live votes received from the server: studentId -> { val, updatedAt }
+        let liveParticipants = new Map();
         let targetAverage = 0;
         let smoothedNeedleValue = 0;
         let activeCount = 0;
@@ -437,11 +430,19 @@
         const SAMPLE_INTERVAL_MS = 1000;
         let historyData = []; // Array of { time: number, value: number }
 
-        // Student Mode State
+        // Student state
         let studentSentiment = 0;
+        let studentRoomCode = null; // room being joined or already joined
+        let studentJoined = false;
         let lastSyncTimestamp = 0;
         let pendingSyncTimeout = null;
         let heartbeatInterval = null;
+
+        const HOST_ROOM_KEY = 'classroomPulse.hostRoom';
+        const STUDENT_ID_KEY = 'classroomPulse.studentId';
+
+        let socket = null;
+        let studentBaseUrl = null; // LAN address students should use, filled from /api/info
 
         // Theme Toggle
         window.toggleTheme = function() {
@@ -449,33 +450,60 @@
             resizeCanvases();
         };
 
-        // =========================================================================
-        // 2. INITIALIZE FIREBASE (WITH GRACEFUL FALLBACK IF OFFLINE/SANDBOXED)
-        // =========================================================================
-        async function initFirebase() {
-            try {
-                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-                    const firebaseConfig = JSON.parse(__firebase_config);
-                    const app = initializeApp(firebaseConfig);
-                    db = getFirestore(app);
-                    auth = getAuth(app);
+        function storageGet(key) {
+            try { return sessionStorage.getItem(key); } catch (e) { return null; }
+        }
+        function storageSet(key, value) {
+            try { sessionStorage.setItem(key, value); } catch (e) { /* storage blocked: fine */ }
+        }
 
-                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                        const cred = await signInWithCustomToken(auth, __initial_auth_token);
-                        currentUser = cred.user;
-                    } else {
-                        const cred = await signInAnonymously(auth);
-                        currentUser = cred.user;
-                    }
-                    firebaseReady = true;
-                }
-            } catch (err) {
-                console.warn("Running in standalone/local preview mode:", err);
-                firebaseReady = false;
+        function randomId() {
+            if (window.crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+            const bytes = new Uint8Array(16);
+            crypto.getRandomValues(bytes);
+            return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        // Stable per-tab ID so a student who refreshes keeps their place in the room
+        const studentId = storageGet(STUDENT_ID_KEY) || randomId();
+        storageSet(STUDENT_ID_KEY, studentId);
+
+        function clampVal(n) {
+            return Math.max(-50, Math.min(50, Math.round(n)));
+        }
+
+        // =========================================================================
+        // 2. REALTIME CONNECTION (SOCKET.IO)
+        // =========================================================================
+        function initRealtime() {
+            if (typeof io === 'undefined') {
+                setConnectionState(false);
+                showToast('Not connected to the Classroom Pulse server. Run "npm start" and open the address it prints.', 'error');
+                return;
             }
 
-            // Initialize URL parameters & initial room state
-            handleInitialRoute();
+            socket = io({ reconnection: true, reconnectionDelayMax: 5000 });
+
+            socket.on('connect', () => {
+                setConnectionState(true);
+                if (currentMode === 'teacher') openHostRoom();
+                if (studentRoomCode) attemptStudentJoin();
+            });
+
+            socket.on('disconnect', () => {
+                setConnectionState(false);
+                if (studentJoined) showToast('Connection lost. Reconnecting…', 'error');
+            });
+
+            socket.on('room:votes', applyVoteSnapshot);
+            socket.on('session:ended', handleSessionEnded);
+        }
+
+        function setConnectionState(connected) {
+            document.querySelectorAll('.live-dot').forEach((dot) => {
+                dot.classList.toggle('bg-emerald-500', connected);
+                dot.classList.toggle('bg-rose-500', !connected);
+            });
         }
 
         // =========================================================================
@@ -485,25 +513,19 @@
             const params = new URLSearchParams(window.location.search);
             const urlMode = params.get('mode');
             const urlRoom = params.get('room');
-
-            if (urlRoom && /^[A-Za-z]{4}$/.test(urlRoom)) {
-                roomCode = urlRoom.toUpperCase();
-            } else {
-                roomCode = generateRandomCode();
-            }
-
-            document.getElementById('teacher-room-code').textContent = roomCode;
-            updateJoinHintUrl();
+            const isValidCode = (code) => /^[A-Za-z]{4}$/.test(code || '');
 
             if (urlMode === 'student') {
                 switchMode('student');
-                if (urlRoom) {
-                    document.getElementById('student-room-input').value = roomCode;
-                    connectStudentToRoom(roomCode);
+                if (isValidCode(urlRoom)) {
+                    connectStudentToRoom(urlRoom.toUpperCase());
                 }
             } else {
+                const startCode = isValidCode(urlRoom)
+                    ? urlRoom.toUpperCase()
+                    : (storageGet(HOST_ROOM_KEY) || generateRandomCode());
+                setRoomCode(startCode);
                 switchMode('teacher');
-                subscribeToRoom(roomCode);
             }
         }
 
@@ -519,17 +541,17 @@
                 studentView.classList.add('hidden');
                 btnTeacher.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 bg-indigo-600 text-white shadow";
                 btnStudent.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white";
-                
-                if (heartbeatInterval) clearInterval(heartbeatInterval);
-                subscribeToRoom(roomCode);
+
+                if (!roomCode) setRoomCode(storageGet(HOST_ROOM_KEY) || generateRandomCode());
+                openHostRoom();
                 resizeCanvases();
             } else {
                 teacherView.classList.add('hidden');
                 studentView.classList.remove('hidden');
                 btnStudent.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 bg-indigo-600 text-white shadow";
                 btnTeacher.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white";
-                
-                // Pre-fill room code if known
+
+                // Pre-fill room code if this board is hosting one
                 const input = document.getElementById('student-room-input');
                 if (!input.value && roomCode) {
                     input.value = roomCode;
@@ -546,74 +568,106 @@
             return code;
         }
 
-        window.generateNewRoom = function() {
-            roomCode = generateRandomCode();
-            document.getElementById('teacher-room-code').textContent = roomCode;
+        function setRoomCode(code) {
+            roomCode = code;
+            document.getElementById('teacher-room-code').textContent = code;
+            storageSet(HOST_ROOM_KEY, code);
             updateJoinHintUrl();
-            resetGraph();
-            subscribeToRoom(roomCode);
-            showToast(`Created new room code: ${roomCode}`, 'info');
-        };
+        }
+
+        // Base address students open. On localhost, prefer the LAN address so the link works on other devices.
+        function getStudentBaseUrl() {
+            if (location.protocol === 'file:') return null;
+            const isLocal = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+            if (isLocal && studentBaseUrl) return studentBaseUrl;
+            return location.origin + '/';
+        }
 
         function updateJoinHintUrl() {
-            const baseUrl = window.location.href.split('?')[0];
             const hintEl = document.getElementById('join-hint-url');
-            if (baseUrl.startsWith('blob:') || baseUrl.startsWith('about:')) {
-                hintEl.innerHTML = `Students: click <strong class="text-indigo-500 dark:text-indigo-300">Student Dial</strong> tab & enter code <strong class="font-mono">${roomCode}</strong>`;
-            } else {
-                hintEl.innerHTML = `Join link: <span class="text-indigo-600 dark:text-indigo-300 font-mono">${baseUrl}?mode=student&room=${roomCode}</span>`;
+            const base = getStudentBaseUrl();
+            if (!base) {
+                hintEl.innerHTML = 'Start the server with <strong class="font-mono">npm start</strong> and open the address it prints.';
+                return;
+            }
+            hintEl.innerHTML = `Join link: <span class="text-indigo-600 dark:text-indigo-300 font-mono">${base}?mode=student&room=${roomCode}</span>`;
+        }
+
+        async function loadServerInfo() {
+            try {
+                const res = await fetch('/api/info');
+                const info = await res.json();
+                studentBaseUrl = info.studentBaseUrls && info.studentBaseUrls[0] ? info.studentBaseUrls[0] : null;
+                updateJoinHintUrl();
+            } catch (err) {
+                console.warn('Could not load server info:', err);
             }
         }
 
-        window.copyStudentLink = function() {
-            const baseUrl = window.location.href.split('?')[0];
-            const shareUrl = `${baseUrl}?mode=student&room=${roomCode}`;
-            
-            const tempInput = document.createElement('input');
-            tempInput.value = shareUrl;
-            document.body.appendChild(tempInput);
-            tempInput.select();
-            document.execCommand('copy');
-            document.body.removeChild(tempInput);
-            
+        window.generateNewRoom = function() {
+            if (socket && socket.connected && roomCode) {
+                socket.emit('host:close', { room: roomCode });
+            }
+            resetGraph();
+            liveParticipants.clear();
+            setRoomCode(generateRandomCode());
+            openHostRoom();
+            showToast(`Created new room code: ${roomCode}`, 'info');
+        };
+
+        window.copyStudentLink = async function() {
+            const base = getStudentBaseUrl();
+            if (!base) {
+                showToast('Start the server first (npm start).', 'error');
+                return;
+            }
+            const shareUrl = `${base}?mode=student&room=${roomCode}`;
+
+            try {
+                await navigator.clipboard.writeText(shareUrl);
+            } catch (err) {
+                // Clipboard API needs a secure context; fall back to a temporary input
+                const tempInput = document.createElement('input');
+                tempInput.value = shareUrl;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                document.execCommand('copy');
+                document.body.removeChild(tempInput);
+            }
+
             showToast(`Copied link: ?mode=student&room=${roomCode}`, 'success');
         };
 
         // =========================================================================
-        // 4. REAL-TIME FIRESTORE SYNC (TEACHER SUBSCRIPTION & STUDENT BROADCAST)
+        // 4. TEACHER BOARD: HOST A ROOM & RECEIVE VOTES
         // =========================================================================
-        let unsubscribeRoom = null;
-
-        function subscribeToRoom(code) {
-            if (unsubscribeRoom) {
-                unsubscribeRoom();
-                unsubscribeRoom = null;
-            }
-            liveParticipants.clear();
-
-            if (!firebaseReady || !db || !currentUser) return;
-
-            // Strict Rule 1 Path: /artifacts/{appId}/public/data/{collectionName}
-            const collectionName = `pulse_room_${code}`;
-            const roomColRef = collection(db, 'artifacts', appId, 'public', 'data', collectionName);
-
-            unsubscribeRoom = onSnapshot(roomColRef, (snapshot) => {
-                const now = Date.now();
-                liveParticipants.clear();
-                snapshot.forEach((docSnap) => {
-                    const data = docSnap.data();
-                    if (data && typeof data.val === 'number') {
-                        liveParticipants.set(docSnap.id, {
-                            val: Math.max(-50, Math.min(50, data.val)),
-                            updatedAt: data.updatedAt || now
-                        });
-                    }
-                });
-            }, (error) => {
-                console.error("Room listener error:", error);
+        function openHostRoom() {
+            if (!socket || !socket.connected) return;
+            socket.emit('host:open', { room: roomCode }, (res) => {
+                if (!res || !res.ok) {
+                    showToast('Could not open the room. Try refreshing the page.', 'error');
+                    return;
+                }
+                if (res.room !== roomCode) setRoomCode(res.room);
             });
         }
 
+        function applyVoteSnapshot(snapshot) {
+            const now = Date.now();
+            liveParticipants.clear();
+            (snapshot && snapshot.votes || []).forEach((vote) => {
+                if (typeof vote.val === 'number') {
+                    liveParticipants.set(vote.id, {
+                        val: clampVal(vote.val),
+                        updatedAt: vote.updatedAt || now
+                    });
+                }
+            });
+        }
+
+        // =========================================================================
+        // 5. STUDENT DIAL: JOIN A ROOM & SEND VOTES
+        // =========================================================================
         window.handleStudentJoin = function(e) {
             e.preventDefault();
             const raw = document.getElementById('student-room-input').value.trim().toUpperCase();
@@ -625,65 +679,86 @@
         };
 
         function connectStudentToRoom(code) {
-            roomCode = code;
-            document.getElementById('student-connected-room').textContent = roomCode;
-            document.getElementById('student-join-card').classList.add('hidden');
-            document.getElementById('student-controller-card').classList.remove('hidden');
+            studentRoomCode = code;
+            studentJoined = false;
+            document.getElementById('student-room-input').value = code;
+            setStudentView(false);
+            attemptStudentJoin();
+        }
 
-            // Reset dial to 0 Neutral on join
-            updateStudentSentiment(0, true);
+        function attemptStudentJoin() {
+            if (!socket || !socket.connected || !studentRoomCode) return;
+            const code = studentRoomCode;
 
-            // Keep session alive every 25 seconds even if student holds steady at same number
+            socket.emit('student:join', { room: code, studentId }, (res) => {
+                if (studentRoomCode !== code) return; // student changed rooms while waiting
+
+                if (!res || !res.ok) {
+                    studentRoomCode = null;
+                    studentJoined = false;
+                    setStudentView(false);
+                    showToast(res && res.error ? res.error : 'Could not join that room.', 'error');
+                    return;
+                }
+
+                const firstJoin = !studentJoined;
+                studentJoined = true;
+                document.getElementById('student-connected-room').textContent = code;
+                setStudentView(true);
+                sendVote(studentSentiment); // announce presence with the current dial value
+                startHeartbeat();
+                if (firstJoin) showToast(`Connected to Room ${code}`, 'success');
+            });
+        }
+
+        function setStudentView(joined) {
+            document.getElementById('student-join-card').classList.toggle('hidden', joined);
+            document.getElementById('student-controller-card').classList.toggle('hidden', !joined);
+        }
+
+        function sendVote(val) {
+            if (!socket || !studentJoined) return;
+            socket.volatile.emit('student:vote', { val });
+        }
+
+        function startHeartbeat() {
             if (heartbeatInterval) clearInterval(heartbeatInterval);
-            heartbeatInterval = setInterval(() => {
-                pushStudentValueToFirestore(studentSentiment);
-            }, 25000);
-
-            showToast(`Connected to Room ${roomCode}`, 'success');
+            // Keep the vote fresh even when the student holds the dial still
+            heartbeatInterval = setInterval(() => sendVote(studentSentiment), 25000);
         }
 
         window.leaveStudentRoom = function() {
             if (heartbeatInterval) clearInterval(heartbeatInterval);
-            document.getElementById('student-controller-card').classList.add('hidden');
-            document.getElementById('student-join-card').classList.remove('hidden');
+            if (socket && socket.connected && studentJoined) socket.emit('student:leave');
+            studentRoomCode = null;
+            studentJoined = false;
+            setStudentView(false);
         };
 
-        // Throttled broadcast (~200ms) when student drags dial/slider
+        function handleSessionEnded() {
+            if (studentJoined) showToast('Your teacher ended this session.', 'info');
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            studentRoomCode = null;
+            studentJoined = false;
+            setStudentView(false);
+        }
+
+        // Throttled send (~200ms) when student drags dial/slider
         function scheduleStudentSync(val) {
             const now = Date.now();
             const elapsed = now - lastSyncTimestamp;
 
             if (elapsed >= 200) {
                 lastSyncTimestamp = now;
-                pushStudentValueToFirestore(val);
+                sendVote(val);
             } else {
                 if (pendingSyncTimeout) clearTimeout(pendingSyncTimeout);
                 pendingSyncTimeout = setTimeout(() => {
                     lastSyncTimestamp = Date.now();
-                    pushStudentValueToFirestore(studentSentiment);
+                    sendVote(studentSentiment);
                 }, 200 - elapsed);
             }
         }
-
-        async function pushStudentValueToFirestore(val) {
-            // Also update local map immediately so single-device tab switching works seamlessly
-            const uid = currentUser ? currentUser.uid : 'local-student';
-            liveParticipants.set(uid, { val, updatedAt: Date.now() });
-
-            if (!firebaseReady || !db || !currentUser || !roomCode) return;
-
-            try {
-                const collectionName = `pulse_room_${roomCode}`;
-                const studentDocRef = doc(db, 'artifacts', appId, 'public', 'data', collectionName, currentUser.uid);
-                await setDoc(studentDocRef, {
-                    val: val,
-                    updatedAt: Date.now()
-                });
-            } catch (err) {
-                console.error("Failed to sync student dial:", err);
-            }
-        }
-
         // =========================================================================
         // 5. TEACHER CONTROLS: DEMO SIMULATOR, CLEAR GRAPH
         // =========================================================================
@@ -1181,9 +1256,11 @@
         // =========================================================================
         window.addEventListener('resize', resizeCanvases);
         window.addEventListener('DOMContentLoaded', () => {
-            lucide.createIcons();
+            if (window.lucide) lucide.createIcons();
             setupRotaryKnob();
-            initFirebase();
+            initRealtime();
+            handleInitialRoute();
+            loadServerInfo();
             requestAnimationFrame(renderLoop);
         });
     </script>
