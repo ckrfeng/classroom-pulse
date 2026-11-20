@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Classroom Pulse | Live Sentiment Meter</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Inter Font -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@600;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        slate: {
+                            850: '#151e2e',
+                            950: '#090d16',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            transition: background-color 0.2s ease, color 0.2s ease;
+            overflow-x: hidden;
+            touch-action: manipulation;
+        }
+
+        /* Custom Range Slider Styling for Student Mode */
+        input[type=range].sentiment-slider {
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+            cursor: pointer;
+        }
+
+        input[type=range].sentiment-slider::-webkit-slider-runnable-track {
+            height: 22px;
+            border-radius: 9999px;
+            background: linear-gradient(90deg, #ef4444 0%, #f59e0b 50%, #10b981 100%);
+            box-shadow: inset 0 2px 6px rgba(0,0,0,0.6);
+            border: 2px solid #334155;
+        }
+
+        input[type=range].sentiment-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            height: 44px;
+            width: 44px;
+            border-radius: 50%;
+            background: #ffffff;
+            border: 4px solid #0f172a;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5), 0 0 0 2px rgba(255,255,255,0.3);
+            margin-top: -13px;
+            transition: transform 0.1s ease;
+        }
+
+        input[type=range].sentiment-slider:active::-webkit-slider-thumb {
+            transform: scale(1.12);
+        }
+
+        /* Tactile Rotary Knob Styling */
+        .rotary-dial {
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            background: radial-gradient(circle at 30% 30%, #334155, #0f172a);
+            box-shadow: 
+                0 20px 35px -10px rgba(0, 0, 0, 0.8),
+                inset 0 2px 3px rgba(255, 255, 255, 0.15),
+                0 0 0 8px #1e293b;
+        }
+
+        .rotary-dial-inner {
+            background: conic-gradient(from 225deg, #ef4444 0deg, #f59e0b 135deg, #10b981 270deg, transparent 270deg);
+        }
+
+        /* Pulse animation for live indicator */
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 0.8; }
+            100% { transform: scale(2.2); opacity: 0; }
+        }
+        .live-dot::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 9999px;
+            background-color: inherit;
+            animation: pulse-ring 1.5s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-50 selection:bg-indigo-500 selection:text-white">
+
+    <!-- Toast Notification Container (Replaces alert()) -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+    <!-- Top Navigation Bar -->
+    <header class="border-b border-slate-200 dark:border-slate-800/80 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md sticky top-0 z-30">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-2">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-600 to-emerald-500 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                    <i data-lucide="activity" class="w-6 h-6 text-white"></i>
+                </div>
+                <div>
+                    <h1 class="font-extrabold text-lg sm:text-xl tracking-tight text-slate-900 dark:text-white flex items-center gap-2">
+                        Classroom Pulse
+                        <span class="hidden md:inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                            Live Focus Meter
+                        </span>
+                    </h1>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-2 sm:gap-3">
+                <!-- Light / Dark Classroom Theme Toggle -->
+                <button id="btn-theme-toggle" onclick="toggleTheme()" class="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition" title="Switch Light / Dark Classroom Theme">
+                    <i id="theme-icon-sun" data-lucide="sun" class="w-4 h-4 hidden dark:block text-amber-400"></i>
+                    <i id="theme-icon-moon" data-lucide="moon" class="w-4 h-4 block dark:hidden text-indigo-600"></i>
+                </button>
+
+                <!-- Mode Switcher Pills -->
+                <div class="flex items-center bg-slate-100 dark:bg-slate-950 p-1 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <button id="btn-mode-teacher" onclick="switchMode('teacher')" class="px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 bg-indigo-600 text-white shadow">
+                        <i data-lucide="monitor" class="w-4 h-4"></i>
+                        <span>Smart Board</span>
+                    </button>
+                    <button id="btn-mode-student" onclick="switchMode('student')" class="px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white">
+                        <i data-lucide="sliders" class="w-4 h-4"></i>
+                        <span>Student Dial</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- ===================================================================== -->
+    <!-- MODE 1: TEACHER SMART BOARD DISPLAY                                   -->
+    <!-- ===================================================================== -->
+    <main id="view-teacher" class="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-4 sm:py-6 flex flex-col gap-5">
+        
+        <!-- Top Control & Room Join Banner -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+            
+            <!-- Room Code & Student Join Box -->
+            <div class="lg:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-lg">
+                <div class="text-center sm:text-left">
+                    <div class="text-xs font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 mb-1 flex items-center justify-center sm:justify-start gap-1.5">
+                        <span class="relative flex h-2.5 w-2.5">
+                            <span id="live-indicator-dot" class="live-dot relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                        </span>
+                        Student Room Code
+                    </div>
+                    <div class="flex items-center justify-center sm:justify-start gap-3">
+                        <span id="teacher-room-code" class="font-mono text-4xl sm:text-5xl font-black tracking-widest text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-950 px-4 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700/80 select-all">
+                            ----
+                        </span>
+                        <div class="flex flex-col gap-1.5">
+                            <button onclick="copyStudentLink()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition shadow-sm" title="Copy direct student dial URL">
+                                <i data-lucide="link" class="w-3.5 h-3.5"></i>
+                                Copy Student Link
+                            </button>
+                            <button onclick="generateNewRoom()" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-xs font-medium flex items-center gap-1.5 transition border border-slate-200 dark:border-slate-700" title="Generate a fresh 4-letter room code">
+                                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                                New Room
+                            </button>
+                        </div>
+                    </div>
+                    <p id="join-hint-url" class="text-xs text-slate-500 dark:text-slate-400 mt-2 truncate max-w-xs sm:max-w-sm">
+                        Students: open link with <strong class="text-slate-800 dark:text-slate-200">?mode=student</strong>
+                    </p>
+                </div>
+
+                <!-- Active Participant Pill -->
+                <div class="bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-5 py-3 text-center min-w-[125px]">
+                    <div id="active-student-count" class="text-3xl sm:text-4xl font-black text-slate-900 dark:text-white font-mono">0</div>
+                    <div class="text-xs font-semibold text-slate-500 dark:text-slate-400 mt-0.5 flex items-center justify-center gap-1">
+                        <i data-lucide="users" class="w-3.5 h-3.5 text-indigo-500 dark:text-indigo-400"></i>
+                        <span id="active-student-label">Students</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Action Toolbar (Demo Simulator, Clear/Reset Graph) -->
+            <div class="lg:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 flex flex-col justify-between gap-3 shadow-lg">
+                <div class="flex flex-wrap items-center justify-between gap-2.5">
+                    <!-- Demo Mode Toggle -->
+                    <button id="btn-demo-toggle" onclick="toggleDemoMode()" class="px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/40 hover:bg-amber-500/25">
+                        <i data-lucide="sparkles" class="w-4 h-4"></i>
+                        <span id="demo-btn-text">Simulate Class (Demo)</span>
+                    </button>
+
+                    <!-- Clear / Reset Graph -->
+                    <button onclick="resetGraph()" class="px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all bg-slate-100 hover:bg-rose-50 dark:bg-slate-800 dark:hover:bg-rose-950/60 text-slate-700 hover:text-rose-600 dark:text-slate-300 dark:hover:text-rose-300 border border-slate-200 dark:border-slate-700 hover:border-rose-300 dark:hover:border-rose-800">
+                        <i data-lucide="rotate-ccw" class="w-4 h-4"></i>
+                        <span>Clear / Reset Graph</span>
+                    </button>
+                </div>
+
+                <!-- Demo Scenario Presets (Visible when Demo Mode is active) -->
+                <div id="demo-scenario-banner" class="hidden pt-2.5 border-t border-slate-200 dark:border-slate-800/80 flex flex-col gap-2 text-xs">
+                    <span class="text-amber-700 dark:text-amber-300 font-semibold flex items-center gap-1.5">
+                        <i data-lucide="radio" class="w-3.5 h-3.5 animate-pulse"></i>
+                        Live Demo Scenarios (24 simulated students):
+                    </span>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                        <button onclick="setDemoScenario(-42, false)" class="px-2 py-1.5 rounded-lg bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/30 hover:bg-rose-500/25 font-bold truncate">"Lots of Homework!"</button>
+                        <button onclick="setDemoScenario(0, false)" class="px-2 py-1.5 rounded-lg bg-slate-200/80 dark:bg-slate-700/70 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-600 hover:bg-slate-300 dark:hover:bg-slate-700 font-bold truncate">"A Little Homework"</button>
+                        <button onclick="setDemoScenario(46, false)" class="px-2 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25 font-bold truncate">"No Homework!"</button>
+                        <button onclick="setDemoScenario(10, true)" class="px-2 py-1.5 rounded-lg bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30 hover:bg-indigo-500/25 font-bold truncate">"Normal Discussion"</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Top Stage: Large Analog Swinging Sentiment Gauge -->
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-6 flex flex-col items-center justify-between shadow-xl relative overflow-hidden">
+            <div class="w-full flex items-center justify-between z-10">
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Live Class Average</span>
+                <span id="sentiment-status-badge" class="px-3.5 py-1 rounded-full text-xs font-extrabold uppercase tracking-wider bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-700">
+                    Neutral
+                </span>
+            </div>
+
+            <div class="w-full flex flex-col md:flex-row items-center justify-around gap-4 my-1">
+                <!-- Responsive Canvas for Analog Semi-Circular Gauge -->
+                <div class="w-full max-w-[440px] aspect-[16/9] relative flex items-center justify-center">
+                    <canvas id="gauge-canvas" class="w-full h-full block"></canvas>
+                </div>
+
+                <!-- Big Digital Readout -->
+                <div class="text-center z-10 px-4">
+                    <div class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-1">Class Score</div>
+                    <div id="gauge-numeric-readout" class="font-mono text-6xl sm:text-7xl font-black tracking-tight text-slate-900 dark:text-white transition-colors duration-150">
+                        0
+                    </div>
+                    <div class="flex items-center justify-center gap-4 mt-3 text-xs font-bold uppercase tracking-wider">
+                        <span class="text-rose-500">-50 Dislike</span>
+                        <span class="text-slate-400">•</span>
+                        <span class="text-slate-500 dark:text-slate-400">0 Neutral</span>
+                        <span class="text-slate-400">•</span>
+                        <span class="text-emerald-500">+50 Like</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Stage: Real-Time 60-Second Scrolling "Worm" Graph Below Gauge -->
+        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-6 flex flex-col justify-between shadow-xl">
+            <div class="flex items-center justify-between mb-3">
+                <div>
+                    <h2 class="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+                        60-Second Scrolling Sentiment "Worm"
+                    </h2>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Continuous moment-to-moment reaction timeline (updates every second as you speak)</p>
+                </div>
+                <div class="hidden sm:flex items-center gap-3 text-xs font-semibold">
+                    <span class="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400"><span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Positive (+50)</span>
+                    <span class="flex items-center gap-1.5 text-slate-500 dark:text-slate-400"><span class="w-2.5 h-2.5 rounded-full bg-slate-400"></span> Neutral (0)</span>
+                    <span class="flex items-center gap-1.5 text-rose-600 dark:text-rose-400"><span class="w-2.5 h-2.5 rounded-full bg-rose-500"></span> Negative (-50)</span>
+                </div>
+            </div>
+
+            <!-- Responsive Canvas for Scrolling Worm Chart -->
+            <div class="w-full h-[230px] sm:h-[260px] relative bg-slate-50 dark:bg-slate-950/80 rounded-2xl border border-slate-200 dark:border-slate-800/90 p-2">
+                <canvas id="worm-canvas" class="w-full h-full block"></canvas>
+            </div>
+        </div>
+    </main>
+
+    <!-- ===================================================================== -->
+    <!-- MODE 2: STUDENT DIAL CONTROLLER (Mobile / Chromebook Optimized)       -->
+    <!-- ===================================================================== -->
+    <main id="view-student" class="hidden flex-1 max-w-lg w-full mx-auto px-4 py-5 flex flex-col justify-between gap-4">
+        
+        <!-- Step 1: Room Code Join Card (Shown if not yet joined) -->
+        <div id="student-join-card" class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl my-auto text-center">
+            <div class="w-14 h-14 rounded-2xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mx-auto mb-4">
+                <i data-lucide="radio" class="w-7 h-7"></i>
+            </div>
+            <h2 class="text-2xl font-black text-slate-900 dark:text-white mb-1">Join Live Session</h2>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mb-6">Enter the 4-letter code shown on your teacher's smart board.</p>
+            
+            <form onsubmit="handleStudentJoin(event)" class="flex flex-col gap-4">
+                <input 
+                    id="student-room-input" 
+                    type="text" 
+                    maxlength="4" 
+                    placeholder="ABCD" 
+                    autocomplete="off"
+                    autocapitalize="characters"
+                    class="w-full text-center font-mono text-4xl font-black tracking-[0.35em] uppercase bg-slate-100 dark:bg-slate-950 border-2 border-slate-300 dark:border-slate-700 focus:border-indigo-500 rounded-2xl py-4 text-slate-900 dark:text-white outline-none transition"
+                    required
+                />
+                <button type="submit" class="w-full py-4 rounded-2xl bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white font-extrabold text-lg shadow-lg shadow-indigo-600/30 transition flex items-center justify-center gap-2">
+                    <span>Connect Dial</span>
+                    <i data-lucide="arrow-right" class="w-5 h-5"></i>
+                </button>
+            </form>
+        </div>
+
+        <!-- Step 2: Active Student Tactile Dial & Slider Controller -->
+        <div id="student-controller-card" class="hidden flex-1 flex flex-col justify-between gap-4">
+            
+            <!-- Top Status Pill -->
+            <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl px-4 py-3 flex items-center justify-between shadow-sm">
+                <div class="flex items-center gap-2">
+                    <span class="relative flex h-2.5 w-2.5">
+                        <span class="live-dot relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                    </span>
+                    <span class="text-xs font-bold text-slate-600 dark:text-slate-300">Room: <span id="student-connected-room" class="font-mono text-slate-900 dark:text-white font-black">----</span></span>
+                </div>
+                <button onclick="leaveStudentRoom()" class="text-xs font-semibold text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800">
+                    Change Room
+                </button>
+            </div>
+
+            <!-- Live Sentiment Feedback Readout -->
+            <div id="student-feedback-box" class="bg-white dark:bg-slate-900 border-2 border-slate-200 dark:border-slate-800 rounded-3xl p-4 text-center transition-colors duration-200 shadow-sm">
+                <div class="text-xs font-bold uppercase tracking-widest text-slate-400">Your Live Reaction</div>
+                <div id="student-value-display" class="font-mono text-5xl font-black text-slate-900 dark:text-white my-1">0</div>
+                <div id="student-label-display" class="text-sm font-extrabold uppercase tracking-wider text-slate-500">Neutral</div>
+            </div>
+
+            <!-- Interactive Rotary Dial Knob -->
+            <div class="flex flex-col items-center justify-center py-1">
+                <div class="relative w-48 h-48 sm:w-56 sm:h-56 flex items-center justify-center">
+                    <!-- Outer Tick Ring -->
+                    <svg class="absolute inset-0 w-full h-full pointer-events-none" viewBox="0 0 200 200">
+                        <path d="M 35 165 A 90 90 0 1 1 165 165" fill="none" stroke="#94a3b8" stroke-opacity="0.25" stroke-width="10" stroke-linecap="round"/>
+                        <path id="dial-arc-active" d="M 35 165 A 90 90 0 1 1 165 165" fill="none" stroke="#94a3b8" stroke-width="10" stroke-linecap="round" stroke-dasharray="424" stroke-dashoffset="212"/>
+                        <text x="24" y="188" fill="#ef4444" font-size="11" font-weight="800" font-family="Inter">-50</text>
+                        <text x="95" y="16" fill="#64748b" font-size="11" font-weight="800" font-family="Inter">0</text>
+                        <text x="158" y="188" fill="#10b981" font-size="11" font-weight="800" font-family="Inter">+50</text>
+                    </svg>
+
+                    <!-- Draggable Physical-Feel Knob -->
+                    <div id="rotary-knob" class="rotary-dial w-32 h-32 sm:w-36 sm:h-36 rounded-full relative flex items-center justify-center cursor-grab active:cursor-grabbing">
+                        <!-- Indicator Notch -->
+                        <div id="rotary-indicator" class="w-full h-full rounded-full relative" style="transform: rotate(0deg);">
+                            <div class="w-3.5 h-6 bg-white rounded-full mx-auto mt-2.5 shadow-[0_0_10px_rgba(255,255,255,0.8)]"></div>
+                        </div>
+                        <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                            <span class="text-[10px] font-bold uppercase tracking-widest text-slate-300">Turn Dial</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Wide Synced Slider (Great for Chromebooks / Trackpads) -->
+            <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm">
+                <div class="flex justify-between text-xs font-bold text-slate-500 dark:text-slate-400 mb-2">
+                    <span>Dislike (-50)</span>
+                    <span>Slide or Drag</span>
+                    <span>Like (+50)</span>
+                </div>
+                <input 
+                    id="student-slider" 
+                    type="range" 
+                    min="-50" 
+                    max="50" 
+                    value="0" 
+                    step="1"
+                    class="sentiment-slider w-full"
+                    oninput="updateStudentSentiment(parseInt(this.value, 10))"
+                />
+            </div>
+
+            <!-- 5 Quick-Tap Preset Buttons (-50, -25, 0 Neutral, +25, +50) -->
+            <div class="grid grid-cols-5 gap-1.5 sm:gap-2 pb-2">
+                <button onclick="updateStudentSentiment(-50)" class="py-3 px-1 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 active:bg-rose-500/35 border border-rose-500/40 text-rose-600 dark:text-rose-300 font-extrabold text-xs flex flex-col items-center gap-0.5 transition">
+                    <span class="font-mono text-sm">-50</span>
+                    <span class="text-[10px]">Hate</span>
+                </button>
+                <button onclick="updateStudentSentiment(-25)" class="py-3 px-1 rounded-xl bg-orange-500/15 hover:bg-orange-500/25 active:bg-orange-500/35 border border-orange-500/40 text-orange-600 dark:text-orange-300 font-extrabold text-xs flex flex-col items-center gap-0.5 transition">
+                    <span class="font-mono text-sm">-25</span>
+                    <span class="text-[10px]">Dislike</span>
+                </button>
+                <button onclick="updateStudentSentiment(0)" class="py-3 px-1 rounded-xl bg-slate-200/80 hover:bg-slate-300/80 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-slate-200 font-extrabold text-xs flex flex-col items-center gap-0.5 transition">
+                    <span class="font-mono text-sm">0</span>
+                    <span class="text-[10px]">Neutral</span>
+                </button>
+                <button onclick="updateStudentSentiment(25)" class="py-3 px-1 rounded-xl bg-teal-500/15 hover:bg-teal-500/25 active:bg-teal-500/35 border border-teal-500/40 text-teal-600 dark:text-teal-300 font-extrabold text-xs flex flex-col items-center gap-0.5 transition">
+                    <span class="font-mono text-sm">+25</span>
+                    <span class="text-[10px]">Like</span>
+                </button>
+                <button onclick="updateStudentSentiment(50)" class="py-3 px-1 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 active:bg-emerald-500/35 border border-emerald-500/40 text-emerald-600 dark:text-emerald-300 font-extrabold text-xs flex flex-col items-center gap-0.5 transition">
+                    <span class="font-mono text-sm">+50</span>
+                    <span class="text-[10px]">Love</span>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <!-- Firebase SDK & Application Logic -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // =========================================================================
+        // 1. GLOBAL STATE & CONFIGURATION
+        // =========================================================================
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'classroom-pulse-default';
+        let db = null;
+        let auth = null;
+        let currentUser = null;
+        let firebaseReady = false;
+
+        // App State
+        let currentMode = 'teacher'; // 'teacher' | 'student'
+        let roomCode = '';
+        let isDemoMode = false;
+        let demoBias = 0; // Target bias for demo mode (-50 to +50)
+        let demoWaveActive = false;
+        let demoCurrent = 0;
+
+        // Real-time Sentiment State
+        let liveParticipants = new Map(); // uid -> { val, updatedAt }
+        let targetAverage = 0;
+        let smoothedNeedleValue = 0;
+        let activeCount = 0;
+
+        // 60-Second Scrolling History Buffer (sampled every 1000ms = 60 points)
+        const MAX_HISTORY_POINTS = 60;
+        const SAMPLE_INTERVAL_MS = 1000;
+        let historyData = []; // Array of { time: number, value: number }
+
+        // Student Mode State
+        let studentSentiment = 0;
+        let lastSyncTimestamp = 0;
+        let pendingSyncTimeout = null;
+        let heartbeatInterval = null;
+
+        // Theme Toggle
+        window.toggleTheme = function() {
+            document.documentElement.classList.toggle('dark');
+            resizeCanvases();
+        };
+
+        // =========================================================================
+        // 2. INITIALIZE FIREBASE (WITH GRACEFUL FALLBACK IF OFFLINE/SANDBOXED)
+        // =========================================================================
+        async function initFirebase() {
+            try {
+                if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                    const firebaseConfig = JSON.parse(__firebase_config);
+                    const app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        const cred = await signInWithCustomToken(auth, __initial_auth_token);
+                        currentUser = cred.user;
+                    } else {
+                        const cred = await signInAnonymously(auth);
+                        currentUser = cred.user;
+                    }
+                    firebaseReady = true;
+                }
+            } catch (err) {
+                console.warn("Running in standalone/local preview mode:", err);
+                firebaseReady = false;
+            }
+
+            // Initialize URL parameters & initial room state
+            handleInitialRoute();
+        }
+
+        // =========================================================================
+        // 3. ROUTING & MODE MANAGEMENT
+        // =========================================================================
+        function handleInitialRoute() {
+            const params = new URLSearchParams(window.location.search);
+            const urlMode = params.get('mode');
+            const urlRoom = params.get('room');
+
+            if (urlRoom && /^[A-Za-z]{4}$/.test(urlRoom)) {
+                roomCode = urlRoom.toUpperCase();
+            } else {
+                roomCode = generateRandomCode();
+            }
+
+            document.getElementById('teacher-room-code').textContent = roomCode;
+            updateJoinHintUrl();
+
+            if (urlMode === 'student') {
+                switchMode('student');
+                if (urlRoom) {
+                    document.getElementById('student-room-input').value = roomCode;
+                    connectStudentToRoom(roomCode);
+                }
+            } else {
+                switchMode('teacher');
+                subscribeToRoom(roomCode);
+            }
+        }
+
+        window.switchMode = function(mode) {
+            currentMode = mode;
+            const teacherView = document.getElementById('view-teacher');
+            const studentView = document.getElementById('view-student');
+            const btnTeacher = document.getElementById('btn-mode-teacher');
+            const btnStudent = document.getElementById('btn-mode-student');
+
+            if (mode === 'teacher') {
+                teacherView.classList.remove('hidden');
+                studentView.classList.add('hidden');
+                btnTeacher.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 bg-indigo-600 text-white shadow";
+                btnStudent.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white";
+                
+                if (heartbeatInterval) clearInterval(heartbeatInterval);
+                subscribeToRoom(roomCode);
+                resizeCanvases();
+            } else {
+                teacherView.classList.add('hidden');
+                studentView.classList.remove('hidden');
+                btnStudent.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 bg-indigo-600 text-white shadow";
+                btnTeacher.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white";
+                
+                // Pre-fill room code if known
+                const input = document.getElementById('student-room-input');
+                if (!input.value && roomCode) {
+                    input.value = roomCode;
+                }
+            }
+        };
+
+        function generateRandomCode() {
+            const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // Omitted I and O to avoid confusion with 1 and 0
+            let code = '';
+            for (let i = 0; i < 4; i++) {
+                code += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            return code;
+        }
+
+        window.generateNewRoom = function() {
+            roomCode = generateRandomCode();
+            document.getElementById('teacher-room-code').textContent = roomCode;
+            updateJoinHintUrl();
+            resetGraph();
+            subscribeToRoom(roomCode);
+            showToast(`Created new room code: ${roomCode}`, 'info');
+        };
+
+        function updateJoinHintUrl() {
+            const baseUrl = window.location.href.split('?')[0];
+            const hintEl = document.getElementById('join-hint-url');
+            if (baseUrl.startsWith('blob:') || baseUrl.startsWith('about:')) {
+                hintEl.innerHTML = `Students: click <strong class="text-indigo-500 dark:text-indigo-300">Student Dial</strong> tab & enter code <strong class="font-mono">${roomCode}</strong>`;
+            } else {
+                hintEl.innerHTML = `Join link: <span class="text-indigo-600 dark:text-indigo-300 font-mono">${baseUrl}?mode=student&room=${roomCode}</span>`;
+            }
+        }
+
+        window.copyStudentLink = function() {
+            const baseUrl = window.location.href.split('?')[0];
+            const shareUrl = `${baseUrl}?mode=student&room=${roomCode}`;
+            
+            const tempInput = document.createElement('input');
+            tempInput.value = shareUrl;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+            
+            showToast(`Copied link: ?mode=student&room=${roomCode}`, 'success');
+        };
+
+        // =========================================================================
+        // 4. REAL-TIME FIRESTORE SYNC (TEACHER SUBSCRIPTION & STUDENT BROADCAST)
+        // =========================================================================
+        let unsubscribeRoom = null;
+
+        function subscribeToRoom(code) {
+            if (unsubscribeRoom) {
+                unsubscribeRoom();
+                unsubscribeRoom = null;
+            }
+            liveParticipants.clear();
+
+            if (!firebaseReady || !db || !currentUser) return;
+
+            // Strict Rule 1 Path: /artifacts/{appId}/public/data/{collectionName}
+            const collectionName = `pulse_room_${code}`;
+            const roomColRef = collection(db, 'artifacts', appId, 'public', 'data', collectionName);
+
+            unsubscribeRoom = onSnapshot(roomColRef, (snapshot) => {
+                const now = Date.now();
+                liveParticipants.clear();
+                snapshot.forEach((docSnap) => {
+                    const data = docSnap.data();
+                    if (data && typeof data.val === 'number') {
+                        liveParticipants.set(docSnap.id, {
+                            val: Math.max(-50, Math.min(50, data.val)),
+                            updatedAt: data.updatedAt || now
+                        });
+                    }
+                });
+            }, (error) => {
+                console.error("Room listener error:", error);
+            });
+        }
+
+        window.handleStudentJoin = function(e) {
+            e.preventDefault();
+            const raw = document.getElementById('student-room-input').value.trim().toUpperCase();
+            if (raw.length !== 4) {
+                showToast('Please enter a 4-letter room code.', 'error');
+                return;
+            }
+            connectStudentToRoom(raw);
+        };
+
+        function connectStudentToRoom(code) {
+            roomCode = code;
+            document.getElementById('student-connected-room').textContent = roomCode;
+            document.getElementById('student-join-card').classList.add('hidden');
+            document.getElementById('student-controller-card').classList.remove('hidden');
+
+            // Reset dial to 0 Neutral on join
+            updateStudentSentiment(0, true);
+
+            // Keep session alive every 25 seconds even if student holds steady at same number
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            heartbeatInterval = setInterval(() => {
+                pushStudentValueToFirestore(studentSentiment);
+            }, 25000);
+
+            showToast(`Connected to Room ${roomCode}`, 'success');
+        }
+
+        window.leaveStudentRoom = function() {
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+            document.getElementById('student-controller-card').classList.add('hidden');
+            document.getElementById('student-join-card').classList.remove('hidden');
+        };
+
+        // Throttled broadcast (~200ms) when student drags dial/slider
+        function scheduleStudentSync(val) {
+            const now = Date.now();
+            const elapsed = now - lastSyncTimestamp;
+
+            if (elapsed >= 200) {
+                lastSyncTimestamp = now;
+                pushStudentValueToFirestore(val);
+            } else {
+                if (pendingSyncTimeout) clearTimeout(pendingSyncTimeout);
+                pendingSyncTimeout = setTimeout(() => {
+                    lastSyncTimestamp = Date.now();
+                    pushStudentValueToFirestore(studentSentiment);
+                }, 200 - elapsed);
+            }
+        }
+
+        async function pushStudentValueToFirestore(val) {
+            // Also update local map immediately so single-device tab switching works seamlessly
+            const uid = currentUser ? currentUser.uid : 'local-student';
+            liveParticipants.set(uid, { val, updatedAt: Date.now() });
+
+            if (!firebaseReady || !db || !currentUser || !roomCode) return;
+
+            try {
+                const collectionName = `pulse_room_${roomCode}`;
+                const studentDocRef = doc(db, 'artifacts', appId, 'public', 'data', collectionName, currentUser.uid);
+                await setDoc(studentDocRef, {
+                    val: val,
+                    updatedAt: Date.now()
+                });
+            } catch (err) {
+                console.error("Failed to sync student dial:", err);
+            }
+        }
+
+        // =========================================================================
+        // 5. TEACHER CONTROLS: DEMO SIMULATOR, CLEAR GRAPH
+        // =========================================================================
+        window.toggleDemoMode = function() {
+            isDemoMode = !isDemoMode;
+            const btn = document.getElementById('btn-demo-toggle');
+            const btnText = document.getElementById('demo-btn-text');
+            const banner = document.getElementById('demo-scenario-banner');
+
+            if (isDemoMode) {
+                btn.className = "px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all bg-amber-500 text-slate-950 shadow-lg shadow-amber-500/25";
+                btnText.textContent = "Stop Simulation";
+                banner.classList.remove('hidden');
+                demoBias = 0;
+                demoWaveActive = false;
+                demoCurrent = 0;
+                showToast('Demo Mode Active: Simulating 24 live student dials', 'info');
+            } else {
+                btn.className = "px-4 py-2.5 rounded-xl font-bold text-sm flex items-center gap-2 transition-all bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/40 hover:bg-amber-500/25";
+                btnText.textContent = "Simulate Class (Demo)";
+                banner.classList.add('hidden');
+                showToast('Demo Mode Stopped', 'info');
+            }
+        };
+
+        window.setDemoScenario = function(bias, gentleWave = false) {
+            demoBias = bias;
+            demoWaveActive = gentleWave;
+        };
+
+        window.resetGraph = function() {
+            historyData = [];
+            smoothedNeedleValue = 0;
+            targetAverage = 0;
+            demoBias = 0;
+            demoWaveActive = false;
+            demoCurrent = 0;
+        };
+
+        // =========================================================================
+        // 6. STUDENT TACTILE ROTARY DIAL & SLIDER INTERACTION
+        // =========================================================================
+        window.updateStudentSentiment = function(val, skipSync = false) {
+            val = Math.max(-50, Math.min(50, Math.round(val)));
+            studentSentiment = val;
+
+            // Sync range slider
+            const slider = document.getElementById('student-slider');
+            if (slider) slider.value = val;
+
+            // Rotate knob (-135deg at -50, 0deg at 0, +135deg at +50)
+            const angle = (val / 50) * 135;
+            const indicator = document.getElementById('rotary-indicator');
+            if (indicator) {
+                indicator.style.transform = `rotate(${angle}deg)`;
+            }
+
+            // Update SVG progress arc (total length ~424, midpoint 212)
+            const arc = document.getElementById('dial-arc-active');
+            if (arc) {
+                const offset = 212 - (val / 50) * 212;
+                arc.style.strokeDashoffset = offset;
+                arc.style.stroke = getSentimentColor(val);
+            }
+
+            // Update digital readout & color badges
+            const displayVal = document.getElementById('student-value-display');
+            const displayLabel = document.getElementById('student-label-display');
+            const box = document.getElementById('student-feedback-box');
+
+            if (displayVal && displayLabel && box) {
+                displayVal.textContent = val > 0 ? `+${val}` : `${val}`;
+                const color = getSentimentColor(val);
+                displayVal.style.color = color;
+                displayLabel.style.color = color;
+                displayLabel.textContent = getSentimentLabel(val);
+                box.style.borderColor = val === 0 ? '' : color;
+            }
+
+            if (!skipSync) {
+                scheduleStudentSync(val);
+            }
+        };
+
+        // Touch & Mouse Rotary Knob Dragging Logic
+        function setupRotaryKnob() {
+            const knob = document.getElementById('rotary-knob');
+            if (!knob) return;
+
+            let isDragging = false;
+
+            function handlePointerMove(clientX, clientY) {
+                const rect = knob.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+
+                const dx = clientX - centerX;
+                const dy = clientY - centerY;
+
+                // Angle in degrees where 0 is straight up (12 o'clock)
+                let deg = Math.atan2(dy, dx) * (180 / Math.PI) + 90;
+                if (deg > 180) deg -= 360;
+
+                // Clamp rotation between -135 and +135 degrees
+                deg = Math.max(-135, Math.min(135, deg));
+                const mappedValue = Math.round((deg / 135) * 50);
+                updateStudentSentiment(mappedValue);
+            }
+
+            knob.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                handlePointerMove(e.clientX, e.clientY);
+            });
+
+            window.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                handlePointerMove(e.clientX, e.clientY);
+            });
+
+            window.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+
+            knob.addEventListener('touchstart', (e) => {
+                isDragging = true;
+                if (e.touches.length > 0) {
+                    handlePointerMove(e.touches[0].clientX, e.touches[0].clientY);
+                }
+            }, { passive: true });
+
+            window.addEventListener('touchmove', (e) => {
+                if (!isDragging) return;
+                if (e.touches.length > 0) {
+                    handlePointerMove(e.touches[0].clientX, e.touches[0].clientY);
+                }
+            }, { passive: true });
+
+            window.addEventListener('touchend', () => {
+                isDragging = false;
+            });
+        }
+
+        // =========================================================================
+        // 7. AGGREGATION ENGINE & CANVAS RENDERING (GAUGE + 60s WORM CHART)
+        // =========================================================================
+        function getSentimentColor(val) {
+            if (val <= -25) return '#ef4444'; // Crimson Red
+            if (val < -6) return '#f97316';   // Warm Orange
+            if (val <= 6) return '#94a3b8';   // Neutral Slate Gray
+            if (val < 25) return '#34d399';   // Light Emerald
+            return '#10b981';                 // Deep Emerald Green
+        }
+
+        function getSentimentLabel(val) {
+            if (val <= -35) return 'Strongly Dislike';
+            if (val <= -10) return 'Dislike';
+            if (val < 10) return 'Neutral';
+            if (val < 35) return 'Like';
+            return 'Strongly Like';
+        }
+
+        // Sample class average every 1000ms (1 Hz) for the 60-second scrolling worm chart
+        setInterval(() => {
+            if (currentMode !== 'teacher') return;
+
+            const now = Date.now();
+            const STALE_THRESHOLD_MS = 120000; // Prune inactive > 2 minutes
+
+            if (isDemoMode) {
+                const wave = demoWaveActive
+                    ? Math.sin(now / 1500) * 8 + Math.cos(now / 800) * 4
+                    : Math.sin(now / 1800) * 2.5;
+                demoCurrent += ((demoBias + wave) - demoCurrent) * 0.45;
+                targetAverage = Math.max(-50, Math.min(50, demoCurrent));
+                activeCount = 24;
+            } else {
+                let sum = 0;
+                let count = 0;
+                liveParticipants.forEach((entry, uid) => {
+                    if (now - entry.updatedAt <= STALE_THRESHOLD_MS) {
+                        sum += entry.val;
+                        count++;
+                    } else {
+                        liveParticipants.delete(uid);
+                    }
+                });
+                activeCount = count;
+                targetAverage = count > 0 ? (sum / count) : 0;
+            }
+
+            // Update Participant Counter UI
+            const countEl = document.getElementById('active-student-count');
+            const labelEl = document.getElementById('active-student-label');
+            if (countEl) countEl.textContent = activeCount;
+            if (labelEl) labelEl.textContent = activeCount === 1 ? 'Student' : 'Students';
+
+            // Append point to 60-second history
+            historyData.push({ time: now, value: targetAverage });
+            if (historyData.length > MAX_HISTORY_POINTS) {
+                historyData.shift();
+            }
+        }, SAMPLE_INTERVAL_MS);
+
+        // High-FPS Render Loop for silky-smooth needle & worm graph
+        function renderLoop() {
+            if (currentMode === 'teacher') {
+                // Smoothly interpolate needle toward targetAverage
+                smoothedNeedleValue += (targetAverage - smoothedNeedleValue) * 0.14;
+
+                updateTeacherReadouts(smoothedNeedleValue);
+                drawGaugeCanvas(smoothedNeedleValue);
+                drawWormCanvas();
+            }
+            requestAnimationFrame(renderLoop);
+        }
+
+        function updateTeacherReadouts(val) {
+            const rounded = Math.round(val);
+            const readoutEl = document.getElementById('gauge-numeric-readout');
+            const badgeEl = document.getElementById('sentiment-status-badge');
+            const color = getSentimentColor(val);
+
+            if (readoutEl) {
+                readoutEl.textContent = rounded > 0 ? `+${rounded}` : `${rounded}`;
+                readoutEl.style.color = color;
+            }
+            if (badgeEl) {
+                badgeEl.textContent = getSentimentLabel(val);
+                badgeEl.style.color = color;
+                badgeEl.style.borderColor = color;
+            }
+        }
+
+        // Draw Semi-Circular Analog Focus-Group Gauge
+        function drawGaugeCanvas(val) {
+            const canvas = document.getElementById('gauge-canvas');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
+
+            if (canvas.width !== Math.floor(rect.width * dpr) || canvas.height !== Math.floor(rect.height * dpr)) {
+                canvas.width = Math.floor(rect.width * dpr);
+                canvas.height = Math.floor(rect.height * dpr);
+            }
+
+            const isDark = document.documentElement.classList.contains('dark');
+
+            ctx.save();
+            ctx.scale(dpr, dpr);
+            const w = rect.width;
+            const h = rect.height;
+            ctx.clearRect(0, 0, w, h);
+
+            const cx = w / 2;
+            const cy = h * 0.88;
+            const radius = Math.min(w * 0.43, h * 0.76);
+            const arcWidth = Math.max(18, radius * 0.16);
+
+            // Background Track Arc
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius, Math.PI, 2 * Math.PI, false);
+            ctx.lineWidth = arcWidth;
+            ctx.strokeStyle = isDark ? '#1e293b' : '#e2e8f0';
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // Color Gradient Arc (-50 Red -> 0 Neutral Gray -> +50 Emerald)
+            const grad = ctx.createLinearGradient(cx - radius, cy, cx + radius, cy);
+            grad.addColorStop(0.0, '#ef4444');
+            grad.addColorStop(0.32, '#f97316');
+            grad.addColorStop(0.5, '#94a3b8');
+            grad.addColorStop(0.68, '#34d399');
+            grad.addColorStop(1.0, '#10b981');
+
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius, Math.PI, 2 * Math.PI, false);
+            ctx.lineWidth = arcWidth;
+            ctx.strokeStyle = grad;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+
+            // Tick Marks (-50 to +50 in steps of 10)
+            for (let v = -50; v <= 50; v += 10) {
+                const ratio = (v + 50) / 100; // 0 to 1
+                const theta = Math.PI + ratio * Math.PI;
+                const innerR = radius - arcWidth * 0.75;
+                const outerR = radius + arcWidth * 0.75;
+
+                ctx.beginPath();
+                ctx.moveTo(cx + Math.cos(theta) * innerR, cy + Math.sin(theta) * innerR);
+                ctx.lineTo(cx + Math.cos(theta) * outerR, cy + Math.sin(theta) * outerR);
+                ctx.lineWidth = v === 0 ? 3 : 1.5;
+                ctx.strokeStyle = v === 0
+                    ? (isDark ? '#ffffff' : '#0f172a')
+                    : (isDark ? 'rgba(148, 163, 184, 0.45)' : 'rgba(100, 116, 139, 0.45)');
+                ctx.stroke();
+            }
+
+            // Needle Angle (-50 -> PI, 0 -> 1.5*PI, +50 -> 2*PI)
+            const clamped = Math.max(-50, Math.min(50, val));
+            const needleAngle = Math.PI + ((clamped + 50) / 100) * Math.PI;
+            const needleLen = radius - arcWidth * 0.15;
+
+            // Needle Drop Shadow
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.rotate(needleAngle);
+
+            ctx.shadowColor = isDark ? 'rgba(0, 0, 0, 0.65)' : 'rgba(15, 23, 42, 0.35)';
+            ctx.shadowBlur = 10;
+            ctx.shadowOffsetY = 3;
+
+            // Tapered Broadcast Needle
+            ctx.beginPath();
+            ctx.moveTo(-12, -5);
+            ctx.lineTo(needleLen, 0);
+            ctx.lineTo(-12, 5);
+            ctx.closePath();
+            ctx.fillStyle = isDark ? '#ffffff' : '#0f172a';
+            ctx.fill();
+            ctx.restore();
+
+            // Center Pivot Hub
+            ctx.beginPath();
+            ctx.arc(cx, cy, Math.max(12, radius * 0.09), 0, 2 * Math.PI);
+            ctx.fillStyle = isDark ? '#0f172a' : '#ffffff';
+            ctx.fill();
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = getSentimentColor(clamped);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        // Draw Real-Time 60-Second Scrolling "Worm" Line Graph
+        function drawWormCanvas() {
+            const canvas = document.getElementById('worm-canvas');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
+
+            if (canvas.width !== Math.floor(rect.width * dpr) || canvas.height !== Math.floor(rect.height * dpr)) {
+                canvas.width = Math.floor(rect.width * dpr);
+                canvas.height = Math.floor(rect.height * dpr);
+            }
+
+            const isDark = document.documentElement.classList.contains('dark');
+
+            ctx.save();
+            ctx.scale(dpr, dpr);
+            const w = rect.width;
+            const h = rect.height;
+            ctx.clearRect(0, 0, w, h);
+
+            const padLeft = 38;
+            const padRight = 18;
+            const padTop = 18;
+            const padBottom = 24;
+            const plotW = w - padLeft - padRight;
+            const plotH = h - padTop - padBottom;
+            const zeroY = padTop + plotH / 2;
+
+            // Subtle Background Tint Zones (Top Green, Bottom Red)
+            ctx.fillStyle = 'rgba(16, 185, 129, 0.05)';
+            ctx.fillRect(padLeft, padTop, plotW, plotH / 2);
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.05)';
+            ctx.fillRect(padLeft, zeroY, plotW, plotH / 2);
+
+            // Horizontal Gridlines (+50, +25, 0, -25, -50)
+            const levels = [50, 25, 0, -25, -50];
+            ctx.font = '600 11px "JetBrains Mono", monospace';
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+
+            levels.forEach((lvl) => {
+                const y = zeroY - (lvl / 50) * (plotH / 2);
+                ctx.beginPath();
+                ctx.moveTo(padLeft, y);
+                ctx.lineTo(padLeft + plotW, y);
+
+                if (lvl === 0) {
+                    ctx.strokeStyle = 'rgba(148, 163, 184, 0.65)';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([6, 4]);
+                } else {
+                    ctx.strokeStyle = isDark ? 'rgba(148, 163, 184, 0.14)' : 'rgba(100, 116, 139, 0.18)';
+                    ctx.lineWidth = 1;
+                    ctx.setLineDash([]);
+                }
+                ctx.stroke();
+
+                ctx.fillStyle = lvl === 0 ? (isDark ? '#cbd5e1' : '#334155') : '#64748b';
+                ctx.fillText(lvl > 0 ? `+${lvl}` : `${lvl}`, padLeft - 8, y);
+            });
+            ctx.setLineDash([]);
+
+            // Time Axis Labels (-60s to Now)
+            ctx.textAlign = 'center';
+            ctx.fillStyle = '#64748b';
+            ctx.font = '600 10px "Inter", sans-serif';
+            ctx.fillText('-60s', padLeft, h - 8);
+            ctx.fillText('-30s', padLeft + plotW / 2, h - 8);
+            ctx.fillText('LIVE', padLeft + plotW, h - 8);
+
+            if (historyData.length < 2) {
+                ctx.restore();
+                return;
+            }
+
+            // Build Smooth Path across the 60-second window
+            const stepX = plotW / (MAX_HISTORY_POINTS - 1);
+            const startIndexOffset = MAX_HISTORY_POINTS - historyData.length;
+
+            // Vertical Gradient Stroke matching sentiment zones
+            const lineGrad = ctx.createLinearGradient(0, padTop, 0, padTop + plotH);
+            lineGrad.addColorStop(0.0, '#10b981');
+            lineGrad.addColorStop(0.42, '#34d399');
+            lineGrad.addColorStop(0.5, '#94a3b8');
+            lineGrad.addColorStop(0.58, '#f97316');
+            lineGrad.addColorStop(1.0, '#ef4444');
+
+            ctx.beginPath();
+            let lastX = 0;
+            let lastY = zeroY;
+
+            historyData.forEach((pt, idx) => {
+                const x = padLeft + (startIndexOffset + idx) * stepX;
+                const y = zeroY - (pt.value / 50) * (plotH / 2);
+                if (idx === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+                lastX = x;
+                lastY = y;
+            });
+
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = lineGrad;
+            ctx.stroke();
+
+            // Glowing Live Head Dot at the right edge of the worm
+            const headColor = getSentimentColor(historyData[historyData.length - 1].value);
+            ctx.beginPath();
+            ctx.arc(lastX, lastY, 6, 0, 2 * Math.PI);
+            ctx.fillStyle = headColor;
+            ctx.fill();
+            ctx.lineWidth = 2.5;
+            ctx.strokeStyle = isDark ? '#ffffff' : '#0f172a';
+            ctx.stroke();
+
+            ctx.restore();
+        }
+
+        function resizeCanvases() {
+            drawGaugeCanvas(smoothedNeedleValue);
+            drawWormCanvas();
+        }
+
+        // =========================================================================
+        // 8. UI HELPERS (CUSTOM TOASTS)
+        // =========================================================================
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            
+            const colors = {
+                success: 'bg-emerald-950/95 border-emerald-500/50 text-emerald-200',
+                error: 'bg-rose-950/95 border-rose-500/50 text-rose-200',
+                info: 'bg-slate-900/95 border-indigo-500/50 text-slate-100'
+            };
+
+            toast.className = `px-4 py-3 rounded-xl border shadow-xl text-xs sm:text-sm font-semibold backdrop-blur-md transition-all duration-300 transform translate-y-2 opacity-0 ${colors[type] || colors.info}`;
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            requestAnimationFrame(() => {
+                toast.classList.remove('translate-y-2', 'opacity-0');
+            });
+
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-y-2');
+                setTimeout(() => toast.remove(), 300);
+            }, 3200);
+        }
+
+        // =========================================================================
+        // 9. BOOTSTRAP APPLICATION
+        // =========================================================================
+        window.addEventListener('resize', resizeCanvases);
+        window.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+            setupRotaryKnob();
+            initFirebase();
+            requestAnimationFrame(renderLoop);
+        });
+    </script>
+</body>
+</html>
