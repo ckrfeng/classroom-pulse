@@ -324,12 +324,8 @@
                 </div>
             </div>
 
-            <div style="margin-top: 36px;">
-                <div class="slider-ends"><span>Dislike</span><span>Like</span></div>
-                <input id="student-slider" type="range" min="-50" max="50" value="0" step="1" class="sentiment-slider" oninput="updateStudentSentiment(parseInt(this.value, 10))" aria-label="Your reaction, from dislike to like">
-            </div>
 
-            <div class="presets">
+            <div class="presets" style="margin-top: 36px;">
                 <button class="preset" onclick="updateStudentSentiment(-50)">-50<small>Hate</small></button>
                 <button class="preset" onclick="updateStudentSentiment(-25)">-25<small>Dislike</small></button>
                 <button class="preset" onclick="updateStudentSentiment(0)">0<small>Neutral</small></button>
