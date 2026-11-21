@@ -19,7 +19,27 @@
             --up: #2e7d32;
             --down: #c4242a;
             --gutter: clamp(20px, 4vw, 48px);
+            --band: #f3f3f1;
+            --knob: #0a0a0a;
+            --knob-notch: #ffffff;
         }
+
+        html.dark {
+            --ink: #f2f2f0;
+            --ink-2: #a3a3a0;
+            --paper: #121212;
+            --tint: #1d1d1d;
+            --tint-2: #2c2c2c;
+            --chart: #6aa0ff;
+            --up: #5cc27a;
+            --down: #ff7a7a;
+            --band: #181818;
+            --knob: #2a2a2a;
+            --knob-notch: #f2f2f0;
+            color-scheme: dark;
+        }
+        .dial-track { stroke: var(--tint-2); }
+        .dial-text { fill: var(--ink-2); }
 
         * { box-sizing: border-box; }
         html, body { margin: 0; }
@@ -89,13 +109,13 @@
         @keyframes ping { from { transform: scale(1); opacity: 0.6; } to { transform: scale(3); opacity: 0; } }
 
         .reading {
-            display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 56px; align-items: center;
-            padding: 48px 0 0; background: var(--tint); margin: 0 calc(var(--gutter) * -1); padding-left: var(--gutter); padding-right: var(--gutter);
+            display: grid; grid-template-columns: minmax(0, 560px) 260px; justify-content: center; gap: 72px; align-items: center;
+            padding: 48px 0 0; background: var(--band); margin: 0 calc(var(--gutter) * -1); padding-left: var(--gutter); padding-right: var(--gutter);
             padding-top: 56px; padding-bottom: 56px;
         }
         .gauge-wrap { position: relative; width: 100%; aspect-ratio: 16 / 10; }
         .gauge-wrap canvas, .trend-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
-        .score { display: flex; flex-direction: column; gap: 8px; }
+        .score { display: flex; flex-direction: column; gap: 8px; width: 260px; }
         .score-num { font: 500 clamp(96px, 11vw, 160px)/0.9 "Geist", sans-serif; letter-spacing: -0.03em; }
         #sentiment-status-badge { font: 500 26px/1.2 "Geist", sans-serif; }
         .score-note { margin: 16px 0 0; color: var(--ink-2); font-size: 16px; max-width: 34ch; }
@@ -134,21 +154,23 @@
         .room-line strong { font: 500 16px/1 "Geist Mono", ui-monospace, monospace; color: var(--ink); letter-spacing: 0.08em; }
 
         .feedback { text-align: center; padding: 40px 0 24px; }
-        #student-value-display { font: 500 128px/0.9 "Geist", sans-serif; letter-spacing: -0.04em; transition: color 200ms ease-out; }
+        #student-value-display { display: inline-block; min-width: 3.4em; text-align: center; font: 500 128px/0.9 "Geist", sans-serif; letter-spacing: -0.04em; transition: color 450ms ease; }
         #student-label-display { margin-top: 14px; font: 500 20px/1.2 "Geist", sans-serif; color: var(--ink-2); }
 
         .dial { position: relative; width: min(260px, 72vw); aspect-ratio: 1; margin: 16px auto 0; }
+        #dial-arc-active { transition: stroke 450ms ease; }
+        #student-label-display { transition: color 450ms ease; }
         .dial > svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
         .rotary-dial {
             position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-            width: 56%; aspect-ratio: 1; border-radius: 999px; background: var(--ink); cursor: grab;
+            width: 56%; aspect-ratio: 1; border-radius: 999px; background: var(--knob); cursor: grab;
             touch-action: none; user-select: none; -webkit-user-select: none;
         }
         .rotary-dial:active { cursor: grabbing; }
         #rotary-indicator { position: absolute; inset: 0; border-radius: inherit; }
         .notch {
             position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-            width: 6px; height: 24px; border-radius: 999px; background: var(--paper);
+            width: 6px; height: 24px; border-radius: 999px; background: var(--knob-notch);
         }
         .dial-label {
             position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none;
@@ -201,6 +223,15 @@
             *, *::before, *::after { animation: none !important; transition: none !important; }
         }
     </style>
+    <script>
+        (function () {
+            try {
+                var saved = localStorage.getItem('classroomPulse.theme');
+                var dark = saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
+                if (dark) document.documentElement.classList.add('dark');
+            } catch (e) { /* storage blocked: follow the system */ }
+        })();
+    </script>
 </head>
 <body>
 
@@ -211,6 +242,7 @@
         <nav class="tabs" aria-label="Screens">
             <button id="btn-mode-teacher" class="tab is-active" onclick="switchMode('teacher')">Board</button>
             <button id="btn-mode-student" class="tab" onclick="switchMode('student')">Dial</button>
+            <button id="btn-theme-toggle" class="tab" onclick="toggleTheme()">Dark mode</button>
         </nav>
     </header>
 
@@ -281,11 +313,11 @@
 
             <div class="dial">
                 <svg viewBox="0 0 200 200" aria-hidden="true">
-                    <path d="M 35 165 A 90 90 0 1 1 165 165" fill="none" stroke="#e8e8e5" stroke-width="10" stroke-linecap="round"/>
+                    <path class="dial-track" d="M 35 165 A 90 90 0 1 1 165 165" fill="none" stroke="#e8e8e5" stroke-width="10" stroke-linecap="round"/>
                     <path id="dial-arc-active" d="M 35 165 A 90 90 0 1 1 165 165" fill="none" stroke="#1d5fbf" stroke-width="10" stroke-linecap="round" stroke-dasharray="424" stroke-dashoffset="212"/>
-                    <text x="18" y="194" fill="#5c5c5c" font-size="11" font-weight="500">-50</text>
-                    <text x="95" y="14" fill="#5c5c5c" font-size="11" font-weight="500">0</text>
-                    <text x="166" y="194" fill="#5c5c5c" font-size="11" font-weight="500">+50</text>
+                    <text class="dial-text" x="18" y="194" fill="#5c5c5c" font-size="11" font-weight="500">-50</text>
+                    <text class="dial-text" x="95" y="14" fill="#5c5c5c" font-size="11" font-weight="500">0</text>
+                    <text class="dial-text" x="166" y="194" fill="#5c5c5c" font-size="11" font-weight="500">+50</text>
                 </svg>
                 <div id="rotary-knob" class="rotary-dial">
                     <div id="rotary-indicator"><span class="notch"></span></div>
@@ -370,8 +402,14 @@
         const HOST_ROOM_KEY = 'classroomPulse.hostRoom';
 
         // Theme Toggle
+        function syncThemeLabel() {
+            const btn = document.getElementById('btn-theme-toggle');
+            if (btn) btn.textContent = document.documentElement.classList.contains('dark') ? 'Light mode' : 'Dark mode';
+        }
         window.toggleTheme = function() {
-            document.documentElement.classList.toggle('dark');
+            const isDarkNow = document.documentElement.classList.toggle('dark');
+            try { localStorage.setItem('classroomPulse.theme', isDarkNow ? 'dark' : 'light'); } catch (e) { /* storage blocked */ }
+            syncThemeLabel();
             resizeCanvases();
         };
 
@@ -811,9 +849,10 @@
         // 7. AGGREGATION ENGINE & CANVAS RENDERING (GAUGE + 60s WORM CHART)
         // =========================================================================
         function getSentimentColor(val) {
-            if (val <= -6) return '#c4242a';   // dislike signal
-            if (val < 6) return '#6b6b6b';     // neutral
-            return '#2e7d32';                  // like signal
+            const dark = document.documentElement.classList.contains('dark');
+            if (val <= -6) return dark ? '#ff6b6b' : '#e5484d';   // dislike: red
+            if (val < 6) return dark ? '#6aa0ff' : '#1d5fbf';     // neutral: blue
+            return dark ? '#3ddc84' : '#2fa35f';                  // like: green
         }
 
         function getSentimentLabel(val) {
@@ -866,11 +905,29 @@
             }
         }, SAMPLE_INTERVAL_MS);
 
+        // Eases the score colour toward its target, so it morphs between red, blue and green
+        let gaugeColorHex = '#1d5fbf';
+        let gaugeColorRgb = null;
+        function hexToRgb(hex) {
+            const n = parseInt(hex.slice(1), 16);
+            return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+        }
+        function rgbToHex(rgb) {
+            return '#' + rgb.map((c) => Math.round(c).toString(16).padStart(2, '0')).join('');
+        }
+        function updateGaugeColor(val) {
+            const target = hexToRgb(getSentimentColor(val));
+            if (!gaugeColorRgb) gaugeColorRgb = target;
+            gaugeColorRgb = gaugeColorRgb.map((c, i) => c + (target[i] - c) * 0.08);
+            gaugeColorHex = rgbToHex(gaugeColorRgb);
+        }
+
         // High-FPS Render Loop for silky-smooth needle & worm graph
         function renderLoop() {
             if (currentMode === 'teacher') {
                 // Smoothly interpolate needle toward targetAverage
                 smoothedNeedleValue += (targetAverage - smoothedNeedleValue) * 0.14;
+                updateGaugeColor(smoothedNeedleValue);
 
                 updateTeacherReadouts(smoothedNeedleValue);
                 drawGaugeCanvas(smoothedNeedleValue);
@@ -883,7 +940,7 @@
             const rounded = Math.round(val);
             const readoutEl = document.getElementById('gauge-numeric-readout');
             const badgeEl = document.getElementById('sentiment-status-badge');
-            const color = getSentimentColor(val);
+            const color = gaugeColorHex;
 
             if (readoutEl) {
                 readoutEl.textContent = rounded > 0 ? `+${rounded}` : `${rounded}`;
@@ -928,7 +985,7 @@
             ctx.arc(cx, cy, radius, Math.PI, 2 * Math.PI, false);
             ctx.lineWidth = arcWidth;
             ctx.strokeStyle = isDark ? 'rgba(244, 241, 234, 0.12)' : '#eeeeee';
-            ctx.lineCap = 'round';
+            ctx.lineCap = 'butt';
             ctx.stroke();
 
             // Value arc: the score filled in the chart hue, from -50 up to the current value
@@ -936,12 +993,13 @@
             ctx.beginPath();
             ctx.arc(cx, cy, radius, Math.PI, arcEnd, false);
             ctx.lineWidth = arcWidth;
-            ctx.strokeStyle = '#1d5fbf';
+            ctx.strokeStyle = gaugeColorHex;
             ctx.lineCap = 'butt';
             ctx.stroke();
 
             // Tick Marks (-50 to +50 in steps of 10)
             for (let v = -50; v <= 50; v += 10) {
+                if (v === 0) continue; // no tick at neutral
                 const ratio = (v + 50) / 100; // 0 to 1
                 const theta = Math.PI + ratio * Math.PI;
                 const innerR = radius - arcWidth * 0.75;
@@ -987,7 +1045,7 @@
             ctx.fillStyle = isDark ? '#0a0a0a' : '#ffffff';
             ctx.fill();
             ctx.lineWidth = 4;
-            ctx.strokeStyle = getSentimentColor(clamped);
+            ctx.strokeStyle = gaugeColorHex;
             ctx.stroke();
 
             ctx.restore();
@@ -1101,11 +1159,11 @@
             ctx.lineJoin = 'round';
             ctx.lineCap = 'round';
             ctx.lineWidth = 4;
-            ctx.strokeStyle = '#1d5fbf';
+            ctx.strokeStyle = isDark ? '#6aa0ff' : '#1d5fbf';
             ctx.stroke();
 
             // Glowing Live Head Dot at the right edge of the worm
-            const headColor = getSentimentColor(historyData[historyData.length - 1].value);
+            const headColor = gaugeColorHex;
             ctx.beginPath();
             ctx.arc(lastX, lastY, 6, 0, 2 * Math.PI);
             ctx.fillStyle = headColor;
@@ -1155,6 +1213,7 @@
         window.addEventListener('resize', resizeCanvases);
         window.addEventListener('DOMContentLoaded', () => {
             if (window.lucide) lucide.createIcons();
+            syncThemeLabel();
             setupRotaryKnob();
             initFirebase();
             handleInitialRoute();
