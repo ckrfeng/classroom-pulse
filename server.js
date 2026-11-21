@@ -9,7 +9,7 @@ const path = require('path');
 const { Server } = require('socket.io');
 
 const PORT = Number(process.env.PORT) || 3000;
-const PAGE_FILE = path.join(__dirname, 'classroom_pulse_live_focus_group_meter-2.html');
+const PAGE_FILE = path.join(__dirname, 'index.html');
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ'; // no I or O, same as the page
 const CODE_RE = /^[A-Z]{4}$/;
 const BROADCAST_INTERVAL_MS = 150;            // max snapshot rate to the teacher board

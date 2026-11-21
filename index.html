@@ -404,22 +404,39 @@
     </main>
 
 
-    <!-- Socket.IO client, served automatically by server.js -->
-    <script src="/socket.io/socket.io.js"></script>
-
-    <!-- Application Logic (realtime votes via the Classroom Pulse server) -->
+    <!-- Application Logic (realtime votes via Firebase Firestore) -->
     <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, deleteDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
         // =========================================================================
-        // 1. GLOBAL STATE & CONFIGURATION
+        // 0. FIREBASE CONFIG: paste your web app config here (see setup steps)
+        // =========================================================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyDQbTHM4R9DDrNjPpj3gYiWlIUxz3FWI4k",
+            authDomain: "classroom-pulse-956b7.firebaseapp.com",
+            projectId: "classroom-pulse-956b7",
+            storageBucket: "classroom-pulse-956b7.firebasestorage.app",
+            messagingSenderId: "716499717481",
+            appId: "1:716499717481:web:1f7d68206d702576d241f8"
+        };
+
+        const VOTE_STALE_MS = 120000;  // ignore votes older than 2 min (closed tabs)
+        const HEARTBEAT_MS = 25000;    // student re-sends their vote to stay fresh
+        const VOTE_THROTTLE_MS = 300;  // min gap between vote writes while dragging
+
+        // =========================================================================
+        // 1. GLOBAL STATE
         // =========================================================================
         let currentMode = 'teacher'; // 'teacher' | 'student'
-        let roomCode = '';           // room this teacher board is hosting
+        let roomCode = '';           // room this teacher board is showing
         let isDemoMode = false;
         let demoBias = 0; // Target bias for demo mode (-50 to +50)
         let demoWaveActive = false;
         let demoCurrent = 0;
 
-        // Live votes received from the server: studentId -> { val, updatedAt }
+        // Live votes for the teacher board: studentUid -> { val, updatedAt }
         let liveParticipants = new Map();
         let targetAverage = 0;
         let smoothedNeedleValue = 0;
@@ -432,17 +449,21 @@
 
         // Student state
         let studentSentiment = 0;
-        let studentRoomCode = null; // room being joined or already joined
+        let studentRoomCode = null;  // room being joined or already joined
         let studentJoined = false;
         let lastSyncTimestamp = 0;
         let pendingSyncTimeout = null;
         let heartbeatInterval = null;
 
-        const HOST_ROOM_KEY = 'classroomPulse.hostRoom';
-        const STUDENT_ID_KEY = 'classroomPulse.studentId';
+        // Firebase state
+        let db = null;
+        let myUid = null;
+        let firebaseReady = false;
+        let unsubscribeRoom = null;
+        let markAuthReady;
+        const authReady = new Promise((resolve) => { markAuthReady = resolve; });
 
-        let socket = null;
-        let studentBaseUrl = null; // LAN address students should use, filled from /api/info
+        const HOST_ROOM_KEY = 'classroomPulse.hostRoom';
 
         // Theme Toggle
         window.toggleTheme = function() {
@@ -457,46 +478,36 @@
             try { sessionStorage.setItem(key, value); } catch (e) { /* storage blocked: fine */ }
         }
 
-        function randomId() {
-            if (window.crypto && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
-            const bytes = new Uint8Array(16);
-            crypto.getRandomValues(bytes);
-            return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-        }
-
-        // Stable per-tab ID so a student who refreshes keeps their place in the room
-        const studentId = storageGet(STUDENT_ID_KEY) || randomId();
-        storageSet(STUDENT_ID_KEY, studentId);
-
         function clampVal(n) {
             return Math.max(-50, Math.min(50, Math.round(n)));
         }
 
         // =========================================================================
-        // 2. REALTIME CONNECTION (SOCKET.IO)
+        // 2. FIREBASE CONNECTION
         // =========================================================================
-        function initRealtime() {
-            if (typeof io === 'undefined') {
+        async function initFirebase() {
+            const isConfigured = !Object.values(firebaseConfig).some((v) => String(v).startsWith('PASTE_'));
+            if (!isConfigured) {
                 setConnectionState(false);
-                showToast('Not connected to the Classroom Pulse server. Run "npm start" and open the address it prints.', 'error');
+                showToast('Firebase is not set up yet. Paste your config into the page (see setup steps).', 'error');
                 return;
             }
 
-            socket = io({ reconnection: true, reconnectionDelayMax: 5000 });
-
-            socket.on('connect', () => {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                const auth = getAuth(app);
+                const cred = await signInAnonymously(auth);
+                myUid = cred.user.uid;
+                firebaseReady = true;
+                markAuthReady();
                 setConnectionState(true);
-                if (currentMode === 'teacher') openHostRoom();
-                if (studentRoomCode) attemptStudentJoin();
-            });
-
-            socket.on('disconnect', () => {
+                if (currentMode === 'teacher') subscribeToRoom(roomCode);
+            } catch (err) {
+                console.error('Firebase error:', err);
                 setConnectionState(false);
-                if (studentJoined) showToast('Connection lost. Reconnecting…', 'error');
-            });
-
-            socket.on('room:votes', applyVoteSnapshot);
-            socket.on('session:ended', handleSessionEnded);
+                showToast('Could not connect to Firebase. Check your config and Anonymous sign-in.', 'error');
+            }
         }
 
         function setConnectionState(connected) {
@@ -543,7 +554,7 @@
                 btnStudent.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white";
 
                 if (!roomCode) setRoomCode(storageGet(HOST_ROOM_KEY) || generateRandomCode());
-                openHostRoom();
+                subscribeToRoom(roomCode);
                 resizeCanvases();
             } else {
                 teacherView.classList.add('hidden');
@@ -551,7 +562,7 @@
                 btnStudent.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 bg-indigo-600 text-white shadow";
                 btnTeacher.className = "px-3 sm:px-4 py-1.5 rounded-lg text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white";
 
-                // Pre-fill room code if this board is hosting one
+                // Pre-fill room code if this board is showing one
                 const input = document.getElementById('student-room-input');
                 if (!input.value && roomCode) {
                     input.value = roomCode;
@@ -575,11 +586,9 @@
             updateJoinHintUrl();
         }
 
-        // Base address students open. On localhost, prefer the LAN address so the link works on other devices.
+        // Base address students open: the site the teacher is currently on
         function getStudentBaseUrl() {
             if (location.protocol === 'file:') return null;
-            const isLocal = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
-            if (isLocal && studentBaseUrl) return studentBaseUrl;
             return location.origin + '/';
         }
 
@@ -587,38 +596,24 @@
             const hintEl = document.getElementById('join-hint-url');
             const base = getStudentBaseUrl();
             if (!base) {
-                hintEl.innerHTML = 'Start the server with <strong class="font-mono">npm start</strong> and open the address it prints.';
+                hintEl.innerHTML = 'Open this page through a web address (not a file) so students can join.';
                 return;
             }
             hintEl.innerHTML = `Join link: <span class="text-indigo-600 dark:text-indigo-300 font-mono">${base}?mode=student&room=${roomCode}</span>`;
         }
 
-        async function loadServerInfo() {
-            try {
-                const res = await fetch('/api/info');
-                const info = await res.json();
-                studentBaseUrl = info.studentBaseUrls && info.studentBaseUrls[0] ? info.studentBaseUrls[0] : null;
-                updateJoinHintUrl();
-            } catch (err) {
-                console.warn('Could not load server info:', err);
-            }
-        }
-
         window.generateNewRoom = function() {
-            if (socket && socket.connected && roomCode) {
-                socket.emit('host:close', { room: roomCode });
-            }
             resetGraph();
             liveParticipants.clear();
             setRoomCode(generateRandomCode());
-            openHostRoom();
+            subscribeToRoom(roomCode);
             showToast(`Created new room code: ${roomCode}`, 'info');
         };
 
         window.copyStudentLink = async function() {
             const base = getStudentBaseUrl();
             if (!base) {
-                showToast('Start the server first (npm start).', 'error');
+                showToast('Open this page through a web address first.', 'error');
                 return;
             }
             const shareUrl = `${base}?mode=student&room=${roomCode}`;
@@ -639,29 +634,33 @@
         };
 
         // =========================================================================
-        // 4. TEACHER BOARD: HOST A ROOM & RECEIVE VOTES
+        // 4. TEACHER BOARD: LISTEN FOR VOTES IN THE ROOM
         // =========================================================================
-        function openHostRoom() {
-            if (!socket || !socket.connected) return;
-            socket.emit('host:open', { room: roomCode }, (res) => {
-                if (!res || !res.ok) {
-                    showToast('Could not open the room. Try refreshing the page.', 'error');
-                    return;
-                }
-                if (res.room !== roomCode) setRoomCode(res.room);
-            });
-        }
-
-        function applyVoteSnapshot(snapshot) {
-            const now = Date.now();
+        function subscribeToRoom(code) {
+            if (unsubscribeRoom) {
+                unsubscribeRoom();
+                unsubscribeRoom = null;
+            }
             liveParticipants.clear();
-            (snapshot && snapshot.votes || []).forEach((vote) => {
-                if (typeof vote.val === 'number') {
-                    liveParticipants.set(vote.id, {
-                        val: clampVal(vote.val),
-                        updatedAt: vote.updatedAt || now
-                    });
-                }
+            if (!firebaseReady || !db) return;
+
+            // Mark the room as open so students can check the code
+            setDoc(doc(db, 'rooms', code), { openedAt: Date.now() }, { merge: true })
+                .catch((err) => console.error('Could not open room:', err));
+
+            unsubscribeRoom = onSnapshot(collection(db, 'rooms', code, 'votes'), (snapshot) => {
+                const now = Date.now();
+                liveParticipants.clear();
+                snapshot.forEach((docSnap) => {
+                    const data = docSnap.data();
+                    if (typeof data.val === 'number' && typeof data.updatedAt === 'number'
+                        && now - data.updatedAt <= VOTE_STALE_MS) {
+                        liveParticipants.set(docSnap.id, { val: clampVal(data.val), updatedAt: data.updatedAt });
+                    }
+                });
+            }, (err) => {
+                console.error('Room listener error:', err);
+                showToast('Lost the live feed from Firebase. Check the Firestore rules.', 'error');
             });
         }
 
@@ -678,37 +677,36 @@
             connectStudentToRoom(raw);
         };
 
-        function connectStudentToRoom(code) {
+        async function connectStudentToRoom(code) {
             studentRoomCode = code;
             studentJoined = false;
             document.getElementById('student-room-input').value = code;
             setStudentView(false);
-            attemptStudentJoin();
-        }
 
-        function attemptStudentJoin() {
-            if (!socket || !socket.connected || !studentRoomCode) return;
-            const code = studentRoomCode;
+            await authReady;
+            if (studentRoomCode !== code) return; // student changed rooms while waiting
 
-            socket.emit('student:join', { room: code, studentId }, (res) => {
-                if (studentRoomCode !== code) return; // student changed rooms while waiting
-
-                if (!res || !res.ok) {
+            try {
+                const roomSnap = await getDoc(doc(db, 'rooms', code));
+                if (studentRoomCode !== code) return;
+                if (!roomSnap.exists()) {
                     studentRoomCode = null;
-                    studentJoined = false;
-                    setStudentView(false);
-                    showToast(res && res.error ? res.error : 'Could not join that room.', 'error');
+                    showToast(`No live session with code ${code}. Check the code with your teacher.`, 'error');
                     return;
                 }
+            } catch (err) {
+                console.error('Join check failed:', err);
+                studentRoomCode = null;
+                showToast('Could not reach the room. Check your connection.', 'error');
+                return;
+            }
 
-                const firstJoin = !studentJoined;
-                studentJoined = true;
-                document.getElementById('student-connected-room').textContent = code;
-                setStudentView(true);
-                sendVote(studentSentiment); // announce presence with the current dial value
-                startHeartbeat();
-                if (firstJoin) showToast(`Connected to Room ${code}`, 'success');
-            });
+            studentJoined = true;
+            document.getElementById('student-connected-room').textContent = code;
+            setStudentView(true);
+            sendVote(studentSentiment); // announce presence with the current dial value
+            startHeartbeat();
+            showToast(`Connected to Room ${code}`, 'success');
         }
 
         function setStudentView(joined) {
@@ -717,38 +715,41 @@
         }
 
         function sendVote(val) {
-            if (!socket || !studentJoined) return;
-            socket.volatile.emit('student:vote', { val });
+            if (!db || !myUid || !studentJoined || !studentRoomCode) return;
+            setDoc(doc(db, 'rooms', studentRoomCode, 'votes', myUid), { val, updatedAt: Date.now() })
+                .catch((err) => console.error('Vote not saved:', err));
+        }
+
+        function removeMyVote() {
+            if (!db || !myUid || !studentRoomCode) return;
+            deleteDoc(doc(db, 'rooms', studentRoomCode, 'votes', myUid))
+                .catch((err) => console.error('Could not remove vote:', err));
         }
 
         function startHeartbeat() {
             if (heartbeatInterval) clearInterval(heartbeatInterval);
-            // Keep the vote fresh even when the student holds the dial still
-            heartbeatInterval = setInterval(() => sendVote(studentSentiment), 25000);
+            heartbeatInterval = setInterval(() => sendVote(studentSentiment), HEARTBEAT_MS);
         }
 
         window.leaveStudentRoom = function() {
             if (heartbeatInterval) clearInterval(heartbeatInterval);
-            if (socket && socket.connected && studentJoined) socket.emit('student:leave');
+            if (studentJoined) removeMyVote();
             studentRoomCode = null;
             studentJoined = false;
             setStudentView(false);
         };
 
-        function handleSessionEnded() {
-            if (studentJoined) showToast('Your teacher ended this session.', 'info');
-            if (heartbeatInterval) clearInterval(heartbeatInterval);
-            studentRoomCode = null;
-            studentJoined = false;
-            setStudentView(false);
-        }
+        // Best effort: remove the vote when the student closes the tab
+        window.addEventListener('pagehide', () => {
+            if (studentJoined) removeMyVote();
+        });
 
-        // Throttled send (~200ms) when student drags dial/slider
+        // Throttled write (~300ms) when student drags dial/slider
         function scheduleStudentSync(val) {
             const now = Date.now();
             const elapsed = now - lastSyncTimestamp;
 
-            if (elapsed >= 200) {
+            if (elapsed >= VOTE_THROTTLE_MS) {
                 lastSyncTimestamp = now;
                 sendVote(val);
             } else {
@@ -756,9 +757,10 @@
                 pendingSyncTimeout = setTimeout(() => {
                     lastSyncTimestamp = Date.now();
                     sendVote(studentSentiment);
-                }, 200 - elapsed);
+                }, VOTE_THROTTLE_MS - elapsed);
             }
         }
+
         // =========================================================================
         // 5. TEACHER CONTROLS: DEMO SIMULATOR, CLEAR GRAPH
         // =========================================================================
@@ -1258,9 +1260,8 @@
         window.addEventListener('DOMContentLoaded', () => {
             if (window.lucide) lucide.createIcons();
             setupRotaryKnob();
-            initRealtime();
+            initFirebase();
             handleInitialRoute();
-            loadServerInfo();
             requestAnimationFrame(renderLoop);
         });
     </script>

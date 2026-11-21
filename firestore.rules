@@ -1,0 +1,27 @@
+rules_version = '2';
+
+// Paste these into Firebase Console > Firestore Database > Rules.
+// Students must be signed in (anonymous sign-in), can only write their own vote,
+// and votes must be a number from -50 to 50.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /rooms/{code} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null;
+      allow delete: if false;
+    }
+
+    match /rooms/{code}/votes/{uid} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['val', 'updatedAt'])
+        && request.resource.data.val is int
+        && request.resource.data.val >= -50
+        && request.resource.data.val <= 50
+        && request.resource.data.updatedAt is number;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+  }
+}
