@@ -59,7 +59,7 @@
 
         /* Header: a name and two words to switch screens */
         .topbar {
-            display: flex; align-items: center; justify-content: space-between; gap: 24px;
+            display: flex; align-items: baseline; justify-content: space-between; gap: 24px;
             padding: 20px var(--gutter);
         }
         .name { font: 600 16px/1 "Geist", sans-serif; }
@@ -84,11 +84,11 @@
         /* Teacher board */
         .board { padding: 0 var(--gutter) 56px; max-width: 1360px; margin: 0 auto; }
         .hero {
-            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 48px; align-items: end;
+            display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 48px; align-items: start;
             padding: 24px 0 64px;
         }
         .join-code {
-            margin: 0; font: 500 clamp(76px, 12vw, 164px)/0.9 "Geist Mono", ui-monospace, monospace;
+            margin: 0; font: 500 clamp(88px, 11vw, 150px)/0.9 "Geist Mono", ui-monospace, monospace;
             letter-spacing: 0.06em; color: var(--ink);
         }
         .join-hint { margin: 24px 0 0; color: var(--ink-2); font-size: 18px; max-width: 42ch; overflow-wrap: anywhere; }
@@ -96,7 +96,7 @@
         .hero-actions { display: flex; gap: 24px; margin-top: 20px; }
 
         .count { text-align: right; }
-        .count-num { font: 500 clamp(88px, 11vw, 150px)/0.9 "Geist", sans-serif; letter-spacing: -0.03em; }
+        .count-num { font: 500 clamp(88px, 11vw, 150px)/0.9 "Geist", sans-serif; margin: 0; letter-spacing: -0.03em; }
         .count-note { margin: 12px 0 0; color: var(--ink-2); font-size: 18px; display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
 
         .live-dot { position: relative; display: inline-block; width: 9px; height: 9px; border-radius: 999px; background: var(--up); flex: none; }
@@ -252,7 +252,6 @@
         <section class="hero">
             <div>
                 <div id="teacher-room-code" class="join-code">----</div>
-                <p id="join-hint-url" class="join-hint"></p>
                 <div class="hero-actions">
                     <button class="link" onclick="copyStudentLink()">Copy join link</button>
                     <button class="link" onclick="generateNewRoom()">New code</button>
@@ -536,6 +535,7 @@
 
         function updateJoinHintUrl() {
             const hintEl = document.getElementById('join-hint-url');
+            if (!hintEl) return;
             const base = getStudentBaseUrl();
             if (!base) {
                 hintEl.innerHTML = '';
