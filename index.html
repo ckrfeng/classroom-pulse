@@ -687,6 +687,7 @@
 
         window.leaveStudentRoom = function() {
             if (heartbeatInterval) clearInterval(heartbeatInterval);
+            if (idleResetTimeout) clearTimeout(idleResetTimeout);
             if (studentJoined) removeMyVote();
             studentRoomCode = null;
             studentJoined = false;
@@ -757,6 +758,25 @@
         // =========================================================================
         // 6. STUDENT TACTILE ROTARY DIAL & SLIDER INTERACTION
         // =========================================================================
+        // Returns the dial to neutral after 20 seconds without a touch
+        const IDLE_RESET_MS = 20000;
+        let idleResetTimeout = null;
+
+        function scheduleIdleReset() {
+            if (idleResetTimeout) clearTimeout(idleResetTimeout);
+            idleResetTimeout = setTimeout(resetDialToNeutral, IDLE_RESET_MS);
+        }
+
+        function resetDialToNeutral() {
+            if (!studentJoined || studentSentiment === 0) return;
+            const indicator = document.getElementById('rotary-indicator');
+            if (indicator) indicator.style.transition = 'transform 400ms ease-out';
+            updateStudentSentiment(0);
+            setTimeout(() => {
+                if (indicator) indicator.style.transition = '';
+            }, 450);
+        }
+
         window.updateStudentSentiment = function(val, skipSync = false) {
             val = Math.max(-50, Math.min(50, Math.round(val)));
             studentSentiment = val;
@@ -804,6 +824,7 @@
 
             if (!skipSync) {
                 scheduleStudentSync(val);
+                scheduleIdleReset();
             }
         };
 
