@@ -797,22 +797,33 @@
         let studentRound = null;
         let unsubscribeStudentRoomDoc = null;
 
+        // The countdown bar is drawn from a deadline each frame, not a CSS transition,
+        // so it stays correct when the dial is hidden (e.g. the Board tab) and shown again.
+        let idleDeadline = 0;
+        let idleBarRaf = null;
+        function renderIdleBar() {
+            const bar = document.getElementById('idle-bar');
+            idleBarRaf = null;
+            if (!bar) return;
+            const remaining = Math.max(0, idleDeadline - Date.now());
+            bar.style.transform = `scaleX(${idleResetMs > 0 ? remaining / idleResetMs : 0})`;
+            if (remaining > 0) idleBarRaf = requestAnimationFrame(renderIdleBar);
+        }
+
         function scheduleIdleReset(val) {
             const bar = document.getElementById('idle-bar');
             if (idleResetTimeout) clearTimeout(idleResetTimeout);
+            if (idleBarRaf) { cancelAnimationFrame(idleBarRaf); idleBarRaf = null; }
             if (val === 0) {
                 if (bar) bar.style.opacity = '0';
                 return;
             }
             if (bar) {
                 bar.style.background = getSentimentColor(val);
-                bar.style.transition = 'none';
-                bar.style.transform = 'scaleX(1)';
                 bar.style.opacity = '1';
-                void bar.offsetWidth;
-                bar.style.transition = `transform ${idleResetMs}ms linear`;
-                bar.style.transform = 'scaleX(0)';
             }
+            idleDeadline = Date.now() + idleResetMs;
+            renderIdleBar();
             idleResetTimeout = setTimeout(resetDialToNeutral, idleResetMs);
         }
 
