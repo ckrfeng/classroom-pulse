@@ -202,6 +202,14 @@
         .preset small { font: 400 12px/1 "Geist", sans-serif; color: var(--ink-2); }
         .preset:active { transform: scale(0.96); }
 
+        .reset-field { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 15px; }
+        .reset-field input {
+            width: 56px; padding: 4px 0; border: 0; border-bottom: 1.5px solid var(--ink); border-radius: 0;
+            background: transparent; color: var(--ink); outline: none; text-align: center; font: 500 16px "Geist", sans-serif;
+        }
+        .idle-track { width: min(200px, 60%); height: 3px; margin: 0 auto 28px; border-radius: 999px; background: var(--tint-2); overflow: hidden; }
+        .idle-bar { height: 100%; width: 100%; border-radius: 999px; background: var(--ink); transform-origin: left; transform: scaleX(0); opacity: 0; }
+
         /* Toasts */
         #toast-container {
             position: fixed; right: 16px; bottom: 16px; z-index: 50; display: flex; flex-direction: column; gap: 8px;
@@ -284,6 +292,8 @@
         <section class="tools">
             <button id="btn-demo-toggle" class="link" onclick="toggleDemoMode()"><span id="demo-btn-text">Simulate a class</span></button>
             <button class="link" onclick="resetGraph()">Clear graph</button>
+            <button class="link" onclick="clearAllScores()">Clear all scores</button>
+            <label class="reset-field">Reset dial after <input id="idle-reset-input" type="number" min="5" max="300" value="20"> seconds</label>
             <div id="demo-scenario-banner" class="hidden scenarios">
                 <button class="link" onclick="setDemoScenario(-42, false)">Lots of homework</button>
                 <button class="link" onclick="setDemoScenario(0, false)">A little homework</button>
@@ -314,6 +324,7 @@
                 <div id="student-value-display">0</div>
                 <div id="student-label-display">Neutral</div>
             </div>
+            <div class="idle-track"><div id="idle-bar" class="idle-bar"></div></div>
 
             <div class="dial">
                 <svg viewBox="0 0 200 200" aria-hidden="true">
@@ -407,6 +418,8 @@
         let myUid = null;
         let firebaseReady = false;
         let unsubscribeRoom = null;
+        let unsubscribeTeacherRoomDoc = null;
+        let roomRound = 0; // bumped by "Clear all scores"; votes from older rounds are ignored
         let markAuthReady;
         const authReady = new Promise((resolve) => { markAuthReady = resolve; });
 
@@ -595,6 +608,10 @@
                 unsubscribeRoom();
                 unsubscribeRoom = null;
             }
+            if (unsubscribeTeacherRoomDoc) {
+                unsubscribeTeacherRoomDoc();
+                unsubscribeTeacherRoomDoc = null;
+            }
             liveParticipants.clear();
             if (!firebaseReady || !db) return;
 
@@ -602,13 +619,22 @@
             setDoc(doc(db, 'rooms', code), { openedAt: Date.now() }, { merge: true })
                 .catch((err) => console.error('Could not open room:', err));
 
+            unsubscribeTeacherRoomDoc = onSnapshot(doc(db, 'rooms', code), (snap) => {
+                const data = snap.data() || {};
+                roomRound = data.round || 0;
+                const input = document.getElementById('idle-reset-input');
+                if (input && document.activeElement !== input && typeof data.idleResetSeconds === 'number') {
+                    input.value = data.idleResetSeconds;
+                }
+            });
+
             unsubscribeRoom = onSnapshot(collection(db, 'rooms', code, 'votes'), (snapshot) => {
                 const now = Date.now();
                 liveParticipants.clear();
                 snapshot.forEach((docSnap) => {
                     const data = docSnap.data();
                     if (typeof data.val === 'number' && typeof data.updatedAt === 'number'
-                        && now - data.updatedAt <= VOTE_STALE_MS) {
+                        && data.round === roomRound && now - data.updatedAt <= VOTE_STALE_MS) {
                         liveParticipants.set(docSnap.id, { val: clampVal(data.val), updatedAt: data.updatedAt });
                     }
                 });
@@ -643,6 +669,11 @@
             try {
                 const roomSnap = await getDoc(doc(db, 'rooms', code));
                 if (studentRoomCode !== code) return;
+                if (roomSnap.exists()) {
+                    const data = roomSnap.data();
+                    studentRound = data.round || 0;
+                    if (typeof data.idleResetSeconds === 'number') idleResetMs = data.idleResetSeconds * 1000;
+                }
                 if (!roomSnap.exists()) {
                     studentRoomCode = null;
                     showToast(`No live session with code ${code}. Check the code with your teacher.`, 'error');
@@ -660,6 +691,7 @@
             setStudentView(true);
             sendVote(studentSentiment); // announce presence with the current dial value
             startHeartbeat();
+            listenToRoomSettings(code);
             showToast(`Connected to Room ${code}`, 'success');
         }
 
@@ -670,7 +702,7 @@
 
         function sendVote(val) {
             if (!db || !myUid || !studentJoined || !studentRoomCode) return;
-            setDoc(doc(db, 'rooms', studentRoomCode, 'votes', myUid), { val, updatedAt: Date.now() })
+            setDoc(doc(db, 'rooms', studentRoomCode, 'votes', myUid), { val, updatedAt: Date.now(), round: studentRound || 0 })
                 .catch((err) => console.error('Vote not saved:', err));
         }
 
@@ -688,6 +720,7 @@
         window.leaveStudentRoom = function() {
             if (heartbeatInterval) clearInterval(heartbeatInterval);
             if (idleResetTimeout) clearTimeout(idleResetTimeout);
+            if (unsubscribeStudentRoomDoc) { unsubscribeStudentRoomDoc(); unsubscribeStudentRoomDoc = null; }
             if (studentJoined) removeMyVote();
             studentRoomCode = null;
             studentJoined = false;
@@ -758,13 +791,29 @@
         // =========================================================================
         // 6. STUDENT TACTILE ROTARY DIAL & SLIDER INTERACTION
         // =========================================================================
-        // Returns the dial to neutral after 20 seconds without a touch
-        const IDLE_RESET_MS = 20000;
+        // Dial returns to neutral after a set time without a touch; the bar shows the time left
+        let idleResetMs = 20000;
         let idleResetTimeout = null;
+        let studentRound = null;
+        let unsubscribeStudentRoomDoc = null;
 
-        function scheduleIdleReset() {
+        function scheduleIdleReset(val) {
+            const bar = document.getElementById('idle-bar');
             if (idleResetTimeout) clearTimeout(idleResetTimeout);
-            idleResetTimeout = setTimeout(resetDialToNeutral, IDLE_RESET_MS);
+            if (val === 0) {
+                if (bar) bar.style.opacity = '0';
+                return;
+            }
+            if (bar) {
+                bar.style.background = getSentimentColor(val);
+                bar.style.transition = 'none';
+                bar.style.transform = 'scaleX(1)';
+                bar.style.opacity = '1';
+                void bar.offsetWidth;
+                bar.style.transition = `transform ${idleResetMs}ms linear`;
+                bar.style.transform = 'scaleX(0)';
+            }
+            idleResetTimeout = setTimeout(resetDialToNeutral, idleResetMs);
         }
 
         function resetDialToNeutral() {
@@ -775,6 +824,22 @@
             setTimeout(() => {
                 if (indicator) indicator.style.transition = '';
             }, 450);
+        }
+
+        // Follows the room: a new reset time, or "Clear all scores" (a new round)
+        function listenToRoomSettings(code) {
+            if (unsubscribeStudentRoomDoc) unsubscribeStudentRoomDoc();
+            unsubscribeStudentRoomDoc = onSnapshot(doc(db, 'rooms', code), (snap) => {
+                const data = snap.data() || {};
+                if (typeof data.idleResetSeconds === 'number') idleResetMs = data.idleResetSeconds * 1000;
+                const round = data.round || 0;
+                const changed = studentRound !== null && round !== studentRound;
+                studentRound = round;
+                if (changed && studentJoined) {
+                    resetDialToNeutral();
+                    sendVote(0);
+                }
+            });
         }
 
         window.updateStudentSentiment = function(val, skipSync = false) {
@@ -824,7 +889,7 @@
 
             if (!skipSync) {
                 scheduleStudentSync(val);
-                scheduleIdleReset();
+                scheduleIdleReset(val);
             }
         };
 
@@ -1251,12 +1316,34 @@
         // =========================================================================
         // 9. BOOTSTRAP APPLICATION
         // =========================================================================
+        function setupTeacherSettings() {
+            const input = document.getElementById('idle-reset-input');
+            if (!input) return;
+            input.addEventListener('change', () => {
+                const secs = Math.min(300, Math.max(5, Math.round(Number(input.value)) || 20));
+                input.value = secs;
+                if (firebaseReady) {
+                    setDoc(doc(db, 'rooms', roomCode), { idleResetSeconds: secs }, { merge: true })
+                        .catch((err) => console.error('Could not save reset time:', err));
+                }
+            });
+        }
+
+        window.clearAllScores = function() {
+            if (!firebaseReady) return;
+            setDoc(doc(db, 'rooms', roomCode), { round: roomRound + 1 }, { merge: true })
+                .catch((err) => console.error('Could not clear scores:', err));
+            liveParticipants.clear();
+            showToast('Scores cleared', 'info');
+        };
+
         window.addEventListener('resize', resizeCanvases);
         window.addEventListener('DOMContentLoaded', () => {
             if (window.lucide) lucide.createIcons();
             syncThemeLabel();
             setupRotaryKnob();
             initFirebase();
+            setupTeacherSettings();
             handleInitialRoute();
             requestAnimationFrame(renderLoop);
         });
