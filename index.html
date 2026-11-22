@@ -816,14 +816,26 @@
             idleResetTimeout = setTimeout(resetDialToNeutral, idleResetMs);
         }
 
+        // Glides the dial back to neutral over about half a second
+        let resetRaf = null;
         function resetDialToNeutral() {
             if (!studentJoined || studentSentiment === 0) return;
-            const indicator = document.getElementById('rotary-indicator');
-            if (indicator) indicator.style.transition = 'transform 400ms ease-out';
-            updateStudentSentiment(0);
-            setTimeout(() => {
-                if (indicator) indicator.style.transition = '';
-            }, 450);
+            if (resetRaf) cancelAnimationFrame(resetRaf);
+            const startValue = studentSentiment;
+            const startTime = performance.now();
+            const duration = 450;
+            const step = (now) => {
+                const t = Math.min(1, (now - startTime) / duration);
+                const eased = 1 - Math.pow(1 - t, 3);
+                if (t < 1) {
+                    updateStudentSentiment(Math.round(startValue * (1 - eased)), true);
+                    resetRaf = requestAnimationFrame(step);
+                } else {
+                    resetRaf = null;
+                    updateStudentSentiment(0);
+                }
+            };
+            resetRaf = requestAnimationFrame(step);
         }
 
         // Follows the room: a new reset time, or "Clear all scores" (a new round)
@@ -888,6 +900,7 @@
             }
 
             if (!skipSync) {
+                if (resetRaf) { cancelAnimationFrame(resetRaf); resetRaf = null; }
                 scheduleStudentSync(val);
                 scheduleIdleReset(val);
             }
