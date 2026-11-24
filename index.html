@@ -1129,7 +1129,6 @@
 
             // Tick Marks (-50 to +50 in steps of 10)
             for (let v = -50; v <= 50; v += 10) {
-                if (v === 0) continue; // no tick at neutral
                 const ratio = (v + 50) / 100; // 0 to 1
                 const theta = Math.PI + ratio * Math.PI;
                 const innerR = radius - arcWidth * 0.75;
@@ -1138,10 +1137,8 @@
                 ctx.beginPath();
                 ctx.moveTo(cx + Math.cos(theta) * innerR, cy + Math.sin(theta) * innerR);
                 ctx.lineTo(cx + Math.cos(theta) * outerR, cy + Math.sin(theta) * outerR);
-                ctx.lineWidth = v === 0 ? 3 : 1.5;
-                ctx.strokeStyle = v === 0
-                    ? (isDark ? '#ffffff' : '#0a0a0a')
-                    : (isDark ? 'rgba(148, 163, 184, 0.45)' : 'rgba(100, 116, 139, 0.45)');
+                ctx.lineWidth = 1.5;
+                ctx.strokeStyle = isDark ? 'rgba(148, 163, 184, 0.45)' : 'rgba(100, 116, 139, 0.45)';
                 ctx.stroke();
             }
 
